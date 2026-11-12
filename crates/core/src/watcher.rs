@@ -378,3 +378,69 @@ fn fold_name(name: &std::ffi::OsStr) -> OsString {
         name.to_os_string()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// When the worker would run its checks for events arriving at the given
+    /// offsets, using the same deadline rule as the worker loop.
+    fn checks_for(events: &[u64]) -> Vec<Duration> {
+        let base = Instant::now();
+        let mut checks = Vec::new();
+        let mut burst: Option<Burst> = None;
+        for &ms in events {
+            let at = base + Duration::from_millis(ms);
+            if let Some(b) = &burst
+                && at >= b.deadline()
+            {
+                checks.push(b.deadline() - base);
+                burst = None;
+            }
+            match &mut burst {
+                Some(b) => b.last = at,
+                None => {
+                    burst = Some(Burst {
+                        first: at,
+                        last: at,
+                    })
+                }
+            }
+        }
+        if let Some(b) = &burst {
+            checks.push(b.deadline() - base);
+        }
+        checks
+    }
+
+    #[test]
+    fn a_long_stream_is_checked_at_the_latest_every_max_wait() {
+        let every_20ms: Vec<u64> = (0..25).map(|i| i * 20).collect();
+        assert_eq!(
+            checks_for(&every_20ms),
+            [Duration::from_millis(400), Duration::from_millis(555)]
+        );
+    }
+
+    #[test]
+    fn a_pause_of_debounce_ends_a_burst() {
+        assert_eq!(
+            checks_for(&[0, 10, 200]),
+            [Duration::from_millis(85), Duration::from_millis(275)]
+        );
+    }
+
+    #[test]
+    fn checks_are_never_closer_than_debounce() {
+        for gap in [1, 20, 74, 75, 76, 150, 399, 401] {
+            let events: Vec<u64> = (0..40).map(|i| i * gap).collect();
+            let checks = checks_for(&events);
+            for pair in checks.windows(2) {
+                assert!(
+                    pair[1] - pair[0] >= DEBOUNCE,
+                    "events every {gap} ms: checks at {checks:?}"
+                );
+            }
+        }
+    }
+}
