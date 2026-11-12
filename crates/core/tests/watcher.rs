@@ -7,14 +7,17 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use psymd_core::doc_io::token_of;
-use psymd_core::watcher::{DocWatcher, WatchEvent};
+use psymd_core::watcher::{DEBOUNCE, DocWatcher, WatchEvent};
 
 const WAIT: Duration = Duration::from_secs(4);
+
+/// An event with the moment the watcher reported it.
+type Timed = (Instant, WatchEvent);
 
 struct Fixture {
     _dir: tempfile::TempDir,
     path: PathBuf,
-    rx: Receiver<WatchEvent>,
+    rx: Receiver<Timed>,
     watcher: DocWatcher,
 }
 
@@ -24,7 +27,7 @@ fn setup(initial: &[u8]) -> Fixture {
     fs::write(&path, initial).unwrap();
     let (tx, rx) = channel();
     let watcher = DocWatcher::start(path.clone(), Some(token_of(initial)), move |e| {
-        let _ = tx.send(e);
+        let _ = tx.send((Instant::now(), e));
     })
     .unwrap();
     // Let the OS watch settle before the scenario starts.
@@ -37,17 +40,21 @@ fn setup(initial: &[u8]) -> Fixture {
     }
 }
 
-fn next(rx: &Receiver<WatchEvent>) -> WatchEvent {
-    rx.recv_timeout(WAIT).expect("expected a watch event")
+fn next(rx: &Receiver<Timed>) -> WatchEvent {
+    rx.recv_timeout(WAIT).expect("expected a watch event").1
 }
 
 /// Collects events until `quiet` passes without a new one.
-fn drain(rx: &Receiver<WatchEvent>, quiet: Duration) -> Vec<WatchEvent> {
+fn drain_timed(rx: &Receiver<Timed>, quiet: Duration) -> Vec<Timed> {
     let mut v = Vec::new();
     while let Ok(e) = rx.recv_timeout(quiet) {
         v.push(e);
     }
     v
+}
+
+fn drain(rx: &Receiver<Timed>, quiet: Duration) -> Vec<WatchEvent> {
+    drain_timed(rx, quiet).into_iter().map(|(_, e)| e).collect()
 }
 
 fn text(e: &WatchEvent) -> &str {
@@ -81,14 +88,33 @@ fn atomic_rename_emits_changed_once() {
 #[test]
 fn burst_writes_end_on_final_content() {
     let f = setup(b"start");
+    let start = Instant::now();
+    let mut writes = Vec::new();
     for i in 0..25 {
         fs::write(&f.path, format!("zeile {i}\n").repeat(i + 1)).unwrap();
+        writes.push(start.elapsed().as_millis());
         sleep(Duration::from_millis(20));
     }
-    let events = drain(&f.rx, Duration::from_millis(1200));
-    assert!(!events.is_empty());
-    assert!(events.len() <= 6, "too many updates: {}", events.len());
-    assert_eq!(text(events.last().unwrap()), "zeile 24\n".repeat(25));
+    let updates = drain_timed(&f.rx, Duration::from_millis(1200));
+    let times: Vec<u128> = updates
+        .iter()
+        .map(|(t, _)| (*t - start).as_millis())
+        .collect();
+    let report = format!("writes at {writes:?} ms, updates at {times:?} ms");
+    let (last_at, last) = updates.last().expect(&report);
+    let last_at = *last_at - start;
+
+    // Each check runs at least DEBOUNCE after the first event of its burst,
+    // so however the system spreads the events over time, there is at most
+    // one update per DEBOUNCE. More than that means coalescing broke. (How
+    // many updates a stream gets is pinned in the watcher's unit tests.)
+    let limit = 1 + (last_at.as_millis() / DEBOUNCE.as_millis()) as usize;
+    assert!(
+        updates.len() <= limit,
+        "{} updates, at most {limit}: {report}",
+        updates.len()
+    );
+    assert_eq!(text(last), "zeile 24\n".repeat(25), "{report}");
 }
 
 #[test]
