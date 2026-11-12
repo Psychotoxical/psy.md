@@ -1,19 +1,20 @@
 # Performance
 
-Measured on the release build. Only Windows was measured; macOS and Linux
-numbers are not available yet.
+Measured on the release build on Windows and macOS. Linux numbers are not
+available yet. The two machines differ a lot (a current desktop and a 2017
+dual-core laptop), so the platforms are not compared like for like.
 
 ## Setup
 
-| | |
-|---|---|
-| CPU | Intel Core i5-12400F (6 cores, 12 threads) |
-| RAM | 32 GB |
-| Disk | NVMe SSD (project and samples), WebView2 data on the system SSD |
-| OS | Windows 11 Pro, build 26200 |
-| Webview | Microsoft Edge WebView2 Runtime 157 |
-| Build | `npx tauri build` (release profile: LTO, one codegen unit, stripped) |
-| Other | A third-party virus scanner with real-time file scanning was active; it can add delay to file reads and process start. |
+| | Windows | macOS |
+|---|---|---|
+| CPU | Intel Core i5-12400F (6 cores, 12 threads) | Intel Core i5-7360U (2 cores, 4 threads) |
+| RAM | 32 GB | 8 GB |
+| Disk | NVMe SSD (project and samples), WebView2 data on the system SSD | Internal SSD |
+| OS | Windows 11 Pro, build 26200 | macOS 15.8.3 |
+| Webview | Microsoft Edge WebView2 Runtime 157 | WKWebView (system WebKit) |
+| Build | `npx tauri build` (release profile: LTO, one codegen unit, stripped) | same |
+| Other | A third-party virus scanner with real-time file scanning was active; it can add delay to file reads and process start. | Display kept awake with `caffeinate -d` |
 
 ## Method
 
@@ -31,10 +32,18 @@ in epoch milliseconds, so the script compares it with its own clock:
 - **External update latency:** the script writes a temporary file and renames
   it over the open 100 KB document, then waits for `external-applied`
   (watcher debounce of 75 ms included). 15 updates, 600 ms apart.
-- **Memory:** working set and private bytes of `psymd.exe`, and separately of
-  the WebView2 processes it started (browser, renderer, GPU, utility). The
-  WebView2 runtime is part of Windows; its share is listed apart from the app.
-- **Size:** the executable and the NSIS installer.
+- **Memory:** on Windows, working set and private bytes of `psymd.exe`, and
+  separately of the WebView2 processes it started (browser, renderer, GPU,
+  utility). The WebView2 runtime is part of Windows; its share is listed apart
+  from the app. On macOS, RSS and physical footprint (`footprint`, the closest
+  match to private bytes) of the app and of the WebKit processes that appeared
+  after it started; they run as XPC services, not as children of the app.
+- **Size:** the executable and the installer.
+
+The display has to stay awake and unlocked during a run. Large documents are
+inserted over several animation frames; with the display off there are no
+frames, and `doc-1m.md` and `doc-10m.md` never finished in such a run on
+macOS.
 
 Synthetic documents come from `scripts/gen-samples.mjs` (generated text only):
 `doc-100k.md`, `doc-1m.md`, `doc-10m.md` (headings, paragraphs, lists, tables,
@@ -50,7 +59,13 @@ node scripts/gen-samples.mjs perf-samples
 node scripts/measure.mjs target/release/psymd.exe perf-samples 5
 ```
 
-## Results
+On macOS:
+
+```bash
+caffeinate -d node scripts/measure.mjs target/release/psymd perf-samples 5
+```
+
+## Results: Windows
 
 One run of `measure.mjs` with 5 start-ups, 3 opens per document and 15
 external updates, on 2026-11-12. Times are milliseconds after the process was
@@ -128,8 +143,62 @@ for the 10 MB sample).
   viewport). WebView2 memory with `doc-1m.md` went from 898 MB to 591 MB;
   each change was not measured on its own.
 
-### Not measured
+## Results: macOS
 
-- macOS and Linux (WKWebView, WebKitGTK).
+One run of `measure.mjs` with 5 start-ups, 3 opens per document and 15
+external updates, on 2026-11-12. Medians, with the range of the individual
+runs in brackets.
+
+### Start-up and open
+
+| Measurement | Median | Runs |
+|---|---|---|
+| Start-up without a document, window shown | 1004 ms | 991–1795 |
+| File read (`opened`), any sample | 997–1036 ms | 992–1194 |
+| Open `doc-100k.md` (103 KB), document on screen | 1152 ms | 1141–1217 |
+| Open `doc-1m.md` (1.0 MB) | 2321 ms | 2314–2323 |
+| Open `doc-10m.md` (10.5 MB) | 11 976 ms | 11 875–12 771 |
+| Open `tables.md` (61 KB) | 1122 ms | 1108–1205 |
+| Open `code.md` (107 KB) | 1050 ms | 1044–1068 |
+| Open `mermaid.md` (diagrams render afterwards, not included) | 1074 ms | 1026–1287 |
+
+As on Windows, most of the first second passes before the file is read. For
+`doc-10m.md` the window appears after about 1570 ms.
+
+### External update
+
+| Measurement | Median | Range |
+|---|---|---|
+| Atomic replace of the open 100 KB file → change applied on screen | 133 ms | 130–147 |
+| Atomic replace → watcher event reaches the app | 91 ms | 88–93 |
+
+Both include the watcher's 75 ms debounce. On the slower machine the update
+latency matches Windows.
+
+### Memory
+
+RSS / physical footprint, sampled as on Windows. WebKit is the sum of the 2
+WebKit processes that appeared with the app.
+
+| State | psy.md process | WebKit processes |
+|---|---|---|
+| Idle, no document | 78.9 / 22.0 MB | 81.4 / 23.4 MB |
+| `doc-100k.md` | 81.3 / 23.0 MB | 133.3 / 77.4 MB |
+| `doc-1m.md` | 93.4 / 26.0 MB | 268.8 / 194.4 MB |
+| `doc-10m.md` | 81.2 / 33.0 MB | 1472.9 / 1443.4 MB |
+
+RSS includes shared system frameworks; the footprint is the app's own share.
+
+### Size
+
+| Item | Size |
+|---|---|
+| `psymd` (frontend embedded) | 8 494 920 bytes (8.1 MB) |
+| `psy.md.app` | 8.2 MB |
+| DMG | not measured (the DMG step failed on the test machine) |
+
+## Not measured
+
+- Linux (WebKitGTK).
 - Typing latency in the editor of a large file.
 - Memory over a long session with many external updates.
