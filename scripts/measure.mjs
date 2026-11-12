@@ -1,23 +1,32 @@
-// Measures the release build on Windows: start-up, open time, external
-// update latency, memory and bundle size. Timing marks come from the app's
-// PSYMD_PERF log (wall-clock epoch ms), so they compare across processes.
+// Measures the release build on Windows and macOS: start-up, open time,
+// external update latency, memory and bundle size. Timing marks come from the
+// app's PSYMD_PERF log (wall-clock epoch ms), so they compare across processes.
 //
-//   node scripts/measure.mjs <psymd.exe> <samplesDir> [runs]
+//   node scripts/measure.mjs <psymd executable> <samplesDir> [runs]
 //
 // Only for measuring: it backs up and restores psy.md's session file so that
-// each run starts the same way.
+// each run starts the same way. Keep the display awake and unlocked while it
+// runs (on macOS: `caffeinate -d node scripts/measure.mjs ...`); without
+// animation frames large documents are not finished.
 import { execFileSync, spawn } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const [exe, samples, runsArg] = process.argv.slice(2);
 const runs = Number(runsArg ?? 5);
 if (!exe || !samples) {
-  console.error("usage: measure.mjs <psymd.exe> <samplesDir> [runs]");
+  console.error("usage: measure.mjs <psymd executable> <samplesDir> [runs]");
   process.exit(2);
 }
-const sessionFile = join(process.env.APPDATA ?? "", "app.psymd", "session.json");
+const mac = process.platform === "darwin";
+if (process.platform !== "win32" && !mac) {
+  console.error("measure.mjs supports Windows and macOS");
+  process.exit(2);
+}
+const sessionFile = mac
+  ? join(homedir(), "Library", "Application Support", "app.psymd", "session.json")
+  : join(process.env.APPDATA ?? "", "app.psymd", "session.json");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function marks(log) {
@@ -30,7 +39,51 @@ function marks(log) {
   return out;
 }
 
-function memoryOf(pid) {
+// WKWebView runs in XPC services whose parent is launchd, not the app, so
+// the web processes are the com.apple.WebKit.* processes that appeared after
+// the app was started.
+function webkitPids() {
+  if (!mac) return new Set();
+  const text = execFileSync("ps", ["-axo", "pid=,comm="], { encoding: "utf8" });
+  return new Set(
+    text
+      .split("\n")
+      .filter((l) => l.includes("com.apple.WebKit."))
+      .map((l) => Number(l.trim().split(/\s+/)[0])),
+  );
+}
+
+function rssOf(pid) {
+  try {
+    return Number(execFileSync("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" }).trim()) * 1024;
+  } catch {
+    return 0;
+  }
+}
+
+// Physical footprint as reported by footprint(1), the closest match to
+// Windows' private bytes.
+function footprintOf(pid) {
+  try {
+    const text = execFileSync("footprint", ["-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const m = /Footprint:\s+([\d.]+)\s*(B|KB|MB|GB)/.exec(text);
+    return m ? Number(m[1]) * { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 }[m[2]] : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// ws/priv: working set and private bytes on Windows, RSS and physical
+// footprint on macOS.
+function memoryOf(pid, before) {
+  if (mac) {
+    const web = [...webkitPids()].filter((p) => !before.has(p));
+    const sum = (pids) => pids.reduce((a, p) => ({ ws: a.ws + rssOf(p), priv: a.priv + footprintOf(p) }), { ws: 0, priv: 0 });
+    return { app: sum([pid]), webview: sum(web), processes: web.length + 1 };
+  }
   const ps = `
 $all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name
 $tree = @(${pid}); $added = $true
@@ -53,20 +106,23 @@ foreach ($id in $tree) { $p = Get-Process -Id $id -ErrorAction SilentlyContinue;
 async function launch(file, { wait = 2500, until = "ui-ready" } = {}) {
   const log = join(tmpdir(), `psymd-perf-${Date.now()}.log`);
   const args = file ? [file] : [];
+  const before = webkitPids();
   const t0 = Date.now();
   const child = spawn(exe, args, { env: { ...process.env, PSYMD_PERF: log }, stdio: "ignore" });
   // Wait until the UI reports the given mark (or a timeout).
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline && !marks(log)[until]) await sleep(25);
   await sleep(wait);
-  return { child, log, t0 };
+  return { child, log, t0, before };
 }
 
 async function stop(child) {
   try {
-    execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+    if (mac) child.kill("SIGKILL");
+    else execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
   } catch {}
-  await sleep(800);
+  // The WebKit processes on macOS take a moment to exit after the app.
+  await sleep(mac ? 1500 : 800);
 }
 
 const median = (a) => {
@@ -83,13 +139,13 @@ try {
   // Start-up without a document: process start to usable window.
   for (let i = 0; i < runs; i++) {
     if (existsSync(sessionFile)) rmSync(sessionFile);
-    const { child, log, t0 } = await launch(null, { wait: 1500 });
+    const { child, log, t0, before } = await launch(null, { wait: 1500 });
     const m = marks(log);
     results.startup.push({
       shown: (m["window-shown"]?.[0]?.epoch ?? Number.NaN) - t0,
       ready: (m["ui-ready"]?.[0]?.epoch ?? Number.NaN) - t0,
     });
-    if (i === runs - 1) results.memory.idle = memoryOf(child.pid);
+    if (i === runs - 1) results.memory.idle = memoryOf(child.pid, before);
     await stop(child);
   }
 
@@ -99,7 +155,7 @@ try {
     const times = [];
     for (let i = 0; i < Math.min(runs, 3); i++) {
       if (existsSync(sessionFile)) rmSync(sessionFile);
-      const { child, log, t0 } = await launch(file, { wait: 2000, until: "doc-shown" });
+      const { child, log, t0, before } = await launch(file, { wait: 2000, until: "doc-shown" });
       const m = marks(log);
       times.push({
         opened: (m.opened?.[0]?.epoch ?? Number.NaN) - t0,
@@ -107,7 +163,7 @@ try {
         window: (m["window-shown"]?.[0]?.epoch ?? Number.NaN) - t0,
       });
       if (i === 0 && (name === "doc-1m.md" || name === "doc-10m.md" || name === "doc-100k.md")) {
-        results.memory[name] = memoryOf(child.pid);
+        results.memory[name] = memoryOf(child.pid, before);
       }
       await stop(child);
     }
@@ -151,6 +207,7 @@ for (const [name, t] of Object.entries(results.open)) {
 }
 console.log(`update latency (atomic replace → applied): median ${median(results.update.map((u) => u.total))} ms, max ${Math.max(...results.update.map((u) => u.total))} ms; → watcher event median ${median(results.update.map((u) => u.toEvent))} ms (n=${results.update.length})`);
 for (const [k, m] of Object.entries(results.memory)) {
-  console.log(`memory ${k}: app ${mb(m.app.ws)} MB working set / ${mb(m.app.priv)} MB private; WebView2 ${mb(m.webview.ws)} MB / ${mb(m.webview.priv)} MB in ${m.processes - 1} processes`);
+  const [ws, priv, web] = mac ? ["RSS", "footprint", "WebKit"] : ["working set", "private", "WebView2"];
+  console.log(`memory ${k}: app ${mb(m.app.ws)} MB ${ws} / ${mb(m.app.priv)} MB ${priv}; ${web} ${mb(m.webview.ws)} MB / ${mb(m.webview.priv)} MB in ${m.processes - 1} processes`);
 }
-console.log(`exe size: ${mb(exeSize)} MB`);
+console.log(`executable size: ${exeSize} bytes (${mb(exeSize)} MB)`);
