@@ -17,7 +17,8 @@ export function isCmdError(e: unknown): e is CmdError {
 export interface StartupState {
   settings: Record<string, unknown> | null;
   session: Record<string, unknown> | null;
-  startupFile: string | null;
+  /** Files from the command line or the OS, each opens as a tab. */
+  startupFiles: string[];
   platform: "windows" | "macos" | "linux";
 }
 
@@ -97,16 +98,21 @@ export const ipc = {
   saveSettings: (value: object) => invoke<void>("save_settings", { value }),
   saveSession: (value: object) => invoke<void>("save_session", { value }),
   openDocument: (path: string) => invoke<OpenedDoc>("open_document", { path }),
-  closeDocument: () => invoke<void>("close_document"),
-  render: (text: string, reqId: number) => invoke<RenderReply>("render_markdown", { text, reqId }),
+  closeDocument: (sessionId: number) => invoke<void>("close_document", { sessionId }),
+  setActive: (sessionId: number) => invoke<void>("set_active", { sessionId }),
+  revealDocument: (sessionId: number) => invoke<void>("reveal_document", { sessionId }),
+  render: (sessionId: number, text: string, reqId: number) =>
+    invoke<RenderReply>("render_markdown", { sessionId, text, reqId }),
   save: (request: SaveRequest) => invoke<SavedDoc>("save_document", { request }),
   pickOpenFile: () => invoke<string | null>("pick_open_file"),
   pickSavePath: (suggestedName: string) =>
     invoke<string | null>("pick_save_path", { suggestedName }),
-  resolveLink: (href: string) => invoke<string>("resolve_link", { href }),
+  resolveLink: (sessionId: number, href: string) =>
+    invoke<string>("resolve_link", { sessionId, href }),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
-  setExternalImages: (allowed: boolean) => invoke<void>("set_external_images", { allowed }),
-  grantFolder: (dir: string) => invoke<void>("grant_folder", { dir }),
+  setExternalImages: (sessionId: number, allowed: boolean) =>
+    invoke<void>("set_external_images", { sessionId, allowed }),
+  grantFolder: (sessionId: number, dir: string) => invoke<void>("grant_folder", { sessionId, dir }),
   frontendReady: () => invoke<void>("frontend_ready"),
   closeAck: () => invoke<void>("close_ack"),
   confirmClose: () => invoke<void>("confirm_close"),

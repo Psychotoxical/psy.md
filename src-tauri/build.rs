@@ -6,6 +6,8 @@ const COMMANDS: &[&str] = &[
     "save_session",
     "open_document",
     "close_document",
+    "set_active",
+    "reveal_document",
     "render_markdown",
     "save_document",
     "pick_open_file",

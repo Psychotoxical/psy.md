@@ -155,5 +155,22 @@
   "menu.nextChange": "Nächste Änderung",
   "menu.prevChange": "Vorige Änderung",
   "error.byteAt": "ungültiges Byte an Position {n}",
-  "toast.close": "Schließen"
+  "toast.close": "Schließen",
+  "tabs.label": "Geöffnete Dateien",
+  "tabs.open": "Datei öffnen",
+  "tabs.close": "Schließen",
+  "tabs.closeNamed": "{name} schließen",
+  "tabs.closeOthers": "Andere schließen",
+  "tabs.closeRight": "Rechts davon schließen",
+  "tabs.closeAll": "Alle schließen",
+  "tabs.copyPath": "Pfad kopieren",
+  "tabs.revealWin": "Im Explorer zeigen",
+  "tabs.revealMac": "Im Finder zeigen",
+  "tabs.revealLinux": "Im Dateimanager zeigen",
+  "tabs.reopen": "Geschlossenen Tab wieder öffnen",
+  "tabs.changed": "Geändert, seit du hingesehen hast",
+  "menu.closeTab": "Tab schließen",
+  "menu.reopenTab": "Geschlossenen Tab wieder öffnen",
+  "menu.nextTab": "Nächster Tab",
+  "menu.prevTab": "Vorheriger Tab"
 }

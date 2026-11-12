@@ -23,7 +23,7 @@ psy.md is MIT-licensed. It bundles or links the following.
 
 | Crate | License |
 |---|---|
-| tauri, tauri-build, tauri-plugin-dialog, tauri-plugin-opener, tauri-plugin-window-state | Apache-2.0 OR MIT |
+| tauri, tauri-build, tauri-plugin-dialog, tauri-plugin-opener, tauri-plugin-single-instance, tauri-plugin-window-state | Apache-2.0 OR MIT |
 | comrak | BSD-2-Clause |
 | ammonia | MIT OR Apache-2.0 |
 | notify | CC0-1.0 |

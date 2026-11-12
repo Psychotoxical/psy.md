@@ -13,7 +13,7 @@ async function boot(): Promise<void> {
   // drop this branch entirely.
   if (import.meta.env.DEV) Object.assign(window, { __psymd: app });
   await app.bindShell();
-  await app.start(state.startupFile);
+  await app.start(state.startupFiles);
 }
 
 boot().catch((e) => {

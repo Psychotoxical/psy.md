@@ -17,7 +17,11 @@ export type Action =
   | "toggleToc"
   | "settings"
   | "nextChange"
-  | "prevChange";
+  | "prevChange"
+  | "closeTab"
+  | "reopenTab"
+  | "nextTab"
+  | "prevTab";
 
 export interface KeyInput {
   key: string;
@@ -43,6 +47,10 @@ export function shortcutFor(e: KeyInput, platform: Platform): Action | null {
   if (e.key === "F8" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     return e.shiftKey ? "prevChange" : "nextChange";
   }
+  // Ctrl+Tab cycles tabs on every platform, as in browsers.
+  if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
+    return e.shiftKey ? "prevTab" : "nextTab";
+  }
   // AltGr reports Ctrl+Alt on Windows; Alt combinations are left to the OS.
   if (!mod || otherMod || e.altKey) return null;
 
@@ -65,7 +73,11 @@ export function shortcutFor(e: KeyInput, platform: Platform): Action | null {
     case "f":
       return e.shiftKey ? null : "find";
     case "t":
-      return e.shiftKey ? "toggleToc" : null;
+      return e.shiftKey ? "reopenTab" : null;
+    case "w":
+      return e.shiftKey ? null : "closeTab";
+    case "b":
+      return e.shiftKey ? null : "toggleToc";
     default:
       return null;
   }
@@ -85,6 +97,8 @@ const MAC_MENU: ReadonlySet<Action> = new Set<Action>([
   "zoomOut",
   "zoomReset",
   "settings",
+  "closeTab",
+  "reopenTab",
 ]);
 
 /**

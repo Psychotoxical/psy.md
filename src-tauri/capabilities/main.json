@@ -11,6 +11,8 @@
     "allow-save-session",
     "allow-open-document",
     "allow-close-document",
+    "allow-set-active",
+    "allow-reveal-document",
     "allow-render-markdown",
     "allow-save-document",
     "allow-pick-open-file",

@@ -30,7 +30,15 @@ export interface ShowResult {
   changedLine: number | null;
 }
 
+/** Change marks of a tab that is not on screen, by block key. */
+export interface KeptMarks {
+  marks: { key: string; at: number }[];
+  since: number | null;
+}
+
 export interface PreviewHooks {
+  /** The open document (tab) whose folder images and links resolve against. */
+  sessionId(): number;
   marksEnabled(): boolean;
   diagramTheme(): DiagramTheme;
   diagramFont(): string;
@@ -119,7 +127,7 @@ export class Preview {
 
   async show(text: string, opts: ShowOptions = {}): Promise<ShowResult | null> {
     const id = ++this.req;
-    const reply = await ipc.render(text, id);
+    const reply = await ipc.render(this.hooks.sessionId(), text, id);
     if (id !== this.req) return null;
     this.lastMs = reply.ms;
 
@@ -275,6 +283,42 @@ export class Preview {
     this.removals = [];
     this.marksSince = null;
     this.revLayer.replaceChildren();
+  }
+
+  /** Keys of the blocks on screen, to tell later which ones are new. */
+  keys(): Set<string> {
+    return new Set(this.blocks.map((b) => b.key));
+  }
+
+  /** The marks on screen by block key, so they survive a tab switch. */
+  keepMarks(): KeptMarks {
+    const children = this.doc.children;
+    const marks: { key: string; at: number }[] = [];
+    for (let i = 0; i < children.length; i++) {
+      const at = this.marks.get(children[i] as Element);
+      const key = this.blocks[i]?.key;
+      if (at !== undefined && key) marks.push({ key, at });
+    }
+    return { marks, since: this.marksSince };
+  }
+
+  /**
+   * Puts kept marks back after a tab is shown again, and marks the blocks the
+   * reader has not seen (changed while the tab was in the background).
+   */
+  restoreMarks(kept: KeptMarks | null, seen: Set<string> | null, changedAt: number | null): void {
+    if (!this.hooks.marksEnabled()) return;
+    const byKey = new Map(kept?.marks.map((m) => [m.key, m.at]));
+    const children = this.doc.children;
+    for (let i = 0; i < children.length; i++) {
+      const key = this.blocks[i]?.key ?? "";
+      const at =
+        byKey.get(key) ?? (seen && changedAt !== null && !seen.has(key) ? changedAt : undefined);
+      if (at !== undefined) this.marks.set(children[i] as Element, at);
+    }
+    if (this.marks.size === 0) return;
+    this.marksSince = kept?.since ?? changedAt;
+    this.drawMarks();
   }
 
   /** Marked blocks in document order with their source line. */
