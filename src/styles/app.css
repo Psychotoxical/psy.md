@@ -1,0 +1,1042 @@
+/* Shell: header line, contents, panes, footer line, overlays.
+   Structure comes from 1px hairlines; corners stay at 3px. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px / 1.45 var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  overflow: hidden;
+  caret-color: var(--caret);
+}
+
+::selection {
+  background: var(--select);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ctp-surface1) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ctp-surface1);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ctp-surface2);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ app */
+
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-rows: var(--head-h) auto minmax(0, 1fr) var(--foot-h);
+}
+/* Fixed rows: a hidden banner must not shift the others. */
+.head {
+  grid-row: 1;
+}
+.banner {
+  grid-row: 2;
+}
+.body {
+  grid-row: 3;
+  grid-column: 1;
+}
+.foot {
+  grid-row: 4;
+}
+
+/* --------------------------------------------------------------- buttons */
+
+.btn {
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--btn-bg);
+  color: var(--fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--btn-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The recommended action is set apart by weight and a firmer edge, not by
+   colour: blue belongs to focus, selection and links. */
+.btn-primary {
+  border-color: var(--fg-3);
+  font-weight: 600;
+}
+.btn-danger {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.btn-danger:hover {
+  background: color-mix(in oklab, var(--bad) 88%, var(--fg));
+}
+.btn-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-2);
+}
+.btn-quiet:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  flex: none;
+}
+.icon-btn:hover,
+.icon-btn[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--fg);
+}
+.icon {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+
+/* ---------------------------------------------------------- header line */
+
+.head {
+  display: grid;
+  /* Equal side columns keep the section centred; the right one never
+     shrinks below status and view switch, so the title ellipsizes first. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(max-content, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0 6px 0 4px;
+  background: var(--bg-band);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+
+.file-btn {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+  justify-self: start;
+}
+.file-btn:hover,
+.file-btn[aria-expanded="true"] {
+  background: var(--hover);
+}
+.file-name {
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 3ch;
+}
+.file-dir {
+  color: var(--fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  flex: 0 10 auto;
+  min-width: 0;
+  font-size: 12px;
+}
+.file-dirty {
+  color: var(--warn);
+  font-weight: 700;
+}
+.file-btn .icon {
+  align-self: center;
+  width: 12px;
+  height: 12px;
+  color: var(--fg-3);
+}
+
+.head-section {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 34vw;
+  /* With the grid gap this keeps 28px to the status once the columns meet,
+     so the title never reads as part of the file state. */
+  margin-inline: 16px;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.head-section .num {
+  font: 12px var(--font-mono);
+  color: var(--fg-3);
+}
+.head-section .title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.head-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.status {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.status time,
+.status .mono {
+  font: 12px var(--font-mono);
+}
+.sq {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  background: var(--fg-faint);
+}
+.sq[data-state="current"] {
+  background: var(--ok);
+}
+.sq[data-state="unsaved"],
+.sq[data-state="changed"],
+.sq[data-state="saving"] {
+  background: var(--warn);
+}
+.sq[data-state="conflict"],
+.sq[data-state="missing"],
+.sq[data-state="error"] {
+  background: var(--bad);
+}
+
+.views {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  flex: none;
+}
+.views button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.views button + button {
+  border-left: 1px solid var(--line-strong);
+}
+.views button:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.views button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  background: transparent;
+}
+.views button[aria-pressed="true"] {
+  background: var(--ctp-surface0);
+  color: var(--fg);
+  font-weight: 600;
+}
+.views button:focus-visible {
+  outline-offset: -2px;
+}
+
+/* --------------------------------------------------------------- banner */
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px 8px 14px;
+  background: var(--bg-band);
+  border-bottom: 1px solid var(--line);
+}
+.banner-text {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex: 1 1 32ch;
+  min-width: 0;
+  color: var(--fg);
+}
+.banner-text .sq {
+  position: relative;
+  top: -1px;
+}
+.banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ------------------------------------------------------------ body area */
+
+.body {
+  display: grid;
+  grid-template-columns: var(--toc-w) minmax(0, 1fr);
+  min-height: 0;
+  position: relative;
+}
+.app[data-toc="off"] .body,
+.app[data-empty] .body {
+  grid-template-columns: minmax(0, 1fr);
+}
+.app[data-toc="off"] .toc,
+.app[data-empty] .toc {
+  display: none;
+}
+
+.toc {
+  border-right: 1px solid var(--line);
+  overflow: auto;
+  padding: 14px 0 24px;
+  min-height: 0;
+}
+.toc h2 {
+  margin: 0 16px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-3);
+}
+.toc ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.toc a {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: baseline;
+  padding: 3px 12px 3px 14px;
+  color: var(--fg-2);
+  text-decoration: none;
+  line-height: 1.4;
+}
+.toc a:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.toc a[aria-current="location"] {
+  background: var(--tint);
+  color: var(--fg);
+  font-weight: 600;
+}
+.toc a:focus-visible {
+  outline-offset: -2px;
+}
+.toc .n {
+  font: 11.5px var(--font-mono);
+  color: var(--fg-faint);
+  font-weight: 400;
+}
+.toc .t {
+  overflow-wrap: anywhere;
+}
+.toc [data-level="3"] .t {
+  padding-left: 10px;
+}
+.toc [data-level="4"] .t,
+.toc [data-level="5"] .t,
+.toc [data-level="6"] .t {
+  padding-left: 20px;
+  font-size: 12.5px;
+}
+.toc-empty {
+  margin: 0 16px;
+  color: var(--fg-3);
+}
+
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+.app[data-view="split"] .main {
+  grid-template-columns: minmax(0, var(--split, 50%)) 1px minmax(0, 1fr);
+}
+.app[data-view="preview"] .pane-editor,
+.app[data-view="preview"] .splitter,
+.app[data-view="source"] .pane-preview,
+.app[data-view="source"] .splitter {
+  display: none;
+}
+
+.pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+.pane-preview:focus {
+  outline: none;
+}
+.pane-editor {
+  overflow: hidden;
+  display: grid;
+}
+
+.splitter {
+  background: var(--line);
+  cursor: col-resize;
+  position: relative;
+  z-index: 2;
+}
+.splitter::after {
+  content: "";
+  position: absolute;
+  inset: 0 -4px;
+}
+.splitter:hover,
+.splitter[data-dragging],
+.splitter:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+/* ------------------------------------------------------------ footer line */
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 12px 0 14px;
+  background: var(--bg-band);
+  border-top: 1px solid var(--line);
+  color: var(--fg-2);
+  font-size: 12px;
+  white-space: nowrap;
+  min-width: 0;
+}
+.foot-left,
+.foot-right {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.foot-right {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  flex: none;
+}
+.foot .rev-word {
+  color: var(--fg);
+}
+.foot time {
+  font: 11.5px var(--font-mono);
+}
+
+/* ---------------------------------------------------------- empty state */
+
+.empty {
+  padding: max(48px, 14vh) 32px 48px var(--gutter);
+  overflow: auto;
+}
+.empty-inner {
+  max-width: 46ch;
+  display: grid;
+  gap: 14px;
+}
+.empty h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.empty p {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.empty-actions .hint {
+  color: var(--fg-3);
+}
+.empty kbd,
+.menu kbd {
+  font: 11.5px var(--font-mono);
+  color: var(--fg-3);
+}
+.empty .notice {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  color: var(--fg-2);
+}
+.recent h2 {
+  margin: 18px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-3);
+}
+.recent ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.recent li {
+  border-bottom: 1px solid var(--line);
+}
+.recent button {
+  display: grid;
+  width: 100%;
+  padding: 6px 4px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.recent button:hover {
+  background: var(--hover);
+}
+.recent .name {
+  color: var(--fg);
+}
+.recent .dir {
+  color: var(--fg-3);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* -------------------------------------------------------------- menus */
+
+.menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 230px;
+  max-width: min(420px, 92vw);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 4px 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.menu [role="menuitem"],
+.menu [role="menuitemcheckbox"] {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 12px 0 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--fg);
+}
+.menu [role="menuitem"]:hover,
+.menu [role="menuitem"]:focus,
+.menu [role="menuitemcheckbox"]:hover,
+.menu [role="menuitemcheckbox"]:focus {
+  background: var(--hover);
+  outline: none;
+}
+.menu [aria-disabled="true"] {
+  color: var(--fg-3);
+  cursor: default;
+}
+.menu .label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.menu .sub {
+  display: block;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.menu .check {
+  width: 14px;
+  height: 14px;
+}
+.menu hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 4px 0;
+}
+.menu .group {
+  padding: 6px 12px 2px 32px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-3);
+}
+
+/* -------------------------------------------------------------- dialogs */
+
+dialog.dialog {
+  width: min(460px, 92vw);
+  padding: 18px 20px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--fg);
+  box-shadow: var(--shadow);
+}
+dialog.dialog::backdrop {
+  background: var(--scrim);
+}
+.dialog h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.dialog p {
+  margin: 0 0 16px;
+  color: var(--fg-2);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.dialog-actions .spacer {
+  flex: 1;
+}
+
+.settings form {
+  display: grid;
+  gap: 16px;
+}
+.settings fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.settings legend,
+.settings .field-label {
+  padding: 0;
+  margin-bottom: 2px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+  width: fit-content;
+}
+.segmented label {
+  position: relative;
+  padding: 4px 11px;
+  cursor: pointer;
+  color: var(--fg-2);
+}
+.segmented label + label {
+  border-left: 1px solid var(--line-strong);
+}
+.segmented input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.segmented label:has(input:checked) {
+  background: var(--ctp-surface0);
+  color: var(--fg);
+  font-weight: 600;
+}
+.segmented label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.settings select {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  width: fit-content;
+  min-width: 160px;
+}
+.zoom-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.zoom-row output {
+  font: 12px var(--font-mono);
+  min-width: 5ch;
+  text-align: center;
+}
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.check-row input {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+.recent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg-2);
+}
+
+/* ------------------------------------------------------------- find bar */
+
+.find {
+  grid-row: 1;
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 2px 0 8px;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+.app[data-finding] .head-section {
+  display: none;
+}
+.find input {
+  width: min(220px, 40vw);
+  height: 26px;
+  border: 0;
+  background: transparent;
+  outline: none;
+}
+.find input:focus-visible {
+  outline: none;
+}
+.find:focus-within {
+  border-color: var(--accent);
+}
+.find output {
+  font: 11.5px var(--font-mono);
+  color: var(--fg-3);
+  min-width: 9ch;
+  text-align: right;
+  padding-right: 6px;
+  white-space: nowrap;
+}
+.find output[data-none] {
+  color: var(--bad);
+}
+
+/* ------------------------------------------------------- drop and toast */
+
+.drop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--bg) 88%, transparent);
+  outline: 2px dashed var(--accent);
+  outline-offset: -12px;
+  font-size: 15px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.drop[data-invalid] {
+  outline-color: var(--bad);
+  color: var(--fg-2);
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--foot-h) + 14px);
+  transform: translateX(-50%);
+  z-index: 45;
+  max-width: min(560px, 90vw);
+  padding: 8px 12px;
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  background: var(--bg-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+}
+
+/* -------------------------------------------------------------- narrow */
+
+@media (max-width: 860px) {
+  .file-dir {
+    display: none;
+  }
+  :root {
+    --gutter: 44px;
+  }
+}
+
+/* The view switch moves into the More menu before status or section go. */
+@media (max-width: 640px) {
+  .views {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .head-section {
+    display: none;
+  }
+  .head {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .toc {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: min(280px, 82vw);
+    z-index: 20;
+    background: var(--bg-raised);
+    box-shadow: var(--shadow);
+  }
+  .app[data-toc="on"]:not([data-toc-open]) .toc {
+    display: none;
+  }
+  .app[data-view="split"] .main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, var(--split, 50%)) 1px minmax(0, 1fr);
+  }
+  .app[data-view="split"] .splitter {
+    cursor: row-resize;
+  }
+}
+
+@media (max-width: 560px) {
+  :root {
+    --gutter: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Without a document only the empty state fills the main area. */
+.app[data-empty] .pane-preview,
+.app[data-empty] .pane-editor,
+.app[data-empty] .splitter {
+  display: none;
+}
+.app:not([data-empty]) .empty {
+  display: none;
+}
+
+/* Banners lie over the bottom edge of the content instead of pushing it
+   down, so an external event never moves the text being read or typed. */
+.banner {
+  /* Same cell as .body; an explicit column keeps auto-placement from
+     opening a second column next to it. */
+  grid-row: 3;
+  grid-column: 1;
+  align-self: end;
+  z-index: 25;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 0;
+}
+
+.app[data-empty] .views {
+  display: none;
+}
+
+/* Contents is an overlay in split view on medium windows, as on narrow ones. */
+@media (max-width: 1199px) and (min-width: 761px) {
+  .app[data-view="split"] .body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app[data-view="split"] .toc {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: min(280px, 82vw);
+    z-index: 20;
+    background: var(--bg-raised);
+    box-shadow: var(--shadow);
+  }
+  .app[data-view="split"]:not([data-toc-open]) .toc {
+    display: none;
+  }
+}
+
+.toc a[data-changed] .t::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  vertical-align: 0.1em;
+  background: var(--rev);
+}
+
+.foot-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+.foot-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.menu kbd {
+  padding-left: 18px;
+}
+
+.toast .toast-close {
+  width: 22px;
+  height: 22px;
+  margin: -2px -6px -2px 2px;
+  align-self: center;
+}
+.toast .toast-close .icon {
+  width: 13px;
+  height: 13px;
+}
+
+@media (max-width: 520px) {
+  .app[data-finding] .file-btn {
+    display: none;
+  }
+  .app[data-finding] .find {
+    grid-column: 1;
+  }
+}

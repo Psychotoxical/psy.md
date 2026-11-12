@@ -1,0 +1,493 @@
+/* The rendered document. Prose keeps a 70ch measure; tables, code and
+   diagrams may use the full pane width and scroll sideways. */
+
+.doc {
+  position: relative;
+  padding: 26px 40px 40vh var(--gutter);
+  font-family: var(--font-text);
+  font-size: calc(16px * var(--zoom));
+  line-height: 1.65;
+  color: var(--fg);
+  font-variant-numeric: proportional-nums;
+  overflow-wrap: break-word;
+}
+.doc > * {
+  max-width: var(--measure);
+}
+.doc > .table-wrap,
+.doc > .code-block,
+.doc > figure.diagram {
+  max-width: none;
+}
+
+.doc > :first-child,
+.doc > .rev-layer + * {
+  margin-top: 0;
+}
+
+.doc p,
+.doc li,
+.doc blockquote {
+  text-wrap: pretty;
+}
+
+.doc p,
+.doc ul,
+.doc ol,
+.doc dl,
+.doc blockquote,
+.doc details,
+.doc .table-wrap,
+.doc .code-block,
+.doc figure {
+  margin: 0 0 1em;
+}
+
+.doc h1,
+.doc h2,
+.doc h3,
+.doc h4,
+.doc h5,
+.doc h6 {
+  color: var(--fg);
+  line-height: 1.3;
+  font-weight: 650;
+  text-wrap: balance;
+  scroll-margin-top: 16px;
+}
+.doc h1 {
+  font-size: 1.75em;
+  letter-spacing: -0.012em;
+  margin: 1.6em 0 0.6em;
+}
+.doc h2 {
+  font-size: 1.375em;
+  letter-spacing: -0.008em;
+  margin: 1.9em 0 0.55em;
+}
+.doc h3 {
+  font-size: 1.125em;
+  margin: 1.6em 0 0.45em;
+}
+.doc h4 {
+  font-size: 1em;
+  margin: 1.4em 0 0.4em;
+}
+.doc h5,
+.doc h6 {
+  font-size: 0.94em;
+  color: var(--fg-2);
+  margin: 1.3em 0 0.35em;
+}
+.doc :is(h1, h2, h3, h4, h5, h6):target {
+  background: var(--tint);
+}
+
+.doc a {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: color-mix(in oklab, var(--link) 55%, transparent);
+  cursor: pointer;
+}
+.doc a:hover {
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 2px;
+}
+/* Links that leave the app carry a small north-east arrow. */
+.doc a[data-external]::after {
+  content: "";
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 0.15em;
+  vertical-align: 0.05em;
+  background: currentColor;
+  opacity: 0.75;
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 11L11 5M6 5h5v5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.doc strong {
+  font-weight: 650;
+}
+.doc del {
+  color: var(--fg-3);
+}
+.doc mark {
+  background: color-mix(in oklab, var(--ctp-yellow) 32%, transparent);
+  color: inherit;
+  padding: 0 0.1em;
+}
+
+.doc ul,
+.doc ol {
+  padding-left: 1.6em;
+}
+.doc li + li,
+.doc li > ul,
+.doc li > ol {
+  margin-top: 0.25em;
+}
+.doc li > p {
+  margin-bottom: 0.4em;
+}
+.doc li::marker {
+  color: var(--fg-3);
+}
+.doc ol > li::marker {
+  font-variant-numeric: tabular-nums;
+}
+.doc .task-list-item {
+  list-style: none;
+}
+.doc .task-list-item input {
+  margin: 0 0.45em 0 -1.45em;
+  width: 0.95em;
+  height: 0.95em;
+  vertical-align: -0.1em;
+  accent-color: var(--accent);
+}
+
+.doc blockquote {
+  padding: 0 0 0 1em;
+  border-left: 1px solid var(--line-strong);
+  color: var(--fg-2);
+}
+.doc blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.doc hr {
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 2.2em 0;
+}
+
+.doc code,
+.doc kbd,
+.doc samp {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+.doc :not(pre) > code {
+  background: var(--inline-code-bg);
+  border-radius: var(--radius);
+  padding: 0.1em 0.35em;
+  overflow-wrap: break-word;
+}
+.doc kbd {
+  padding: 0.05em 0.4em;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius);
+  background: var(--bg-band);
+}
+
+.code-block {
+  position: relative;
+}
+.doc pre {
+  margin: 0;
+  padding: 0.8em 1em;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  font-size: calc(14px * var(--zoom));
+  line-height: 1.55;
+  tab-size: 4;
+}
+.doc pre code {
+  font-size: inherit;
+  white-space: pre;
+}
+.copy-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  color: var(--fg-2);
+  font: 12px var(--font-ui);
+  cursor: pointer;
+  opacity: 0;
+}
+.code-block:hover .copy-btn,
+.copy-btn:focus-visible,
+.copy-btn[data-done] {
+  opacity: 1;
+}
+.copy-btn:hover {
+  color: var(--fg);
+}
+.copy-btn .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+.doc table {
+  border-collapse: collapse;
+  font-size: 0.94em;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+.doc th,
+.doc td {
+  padding: 0.42em 1.1em 0.42em 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  text-align: left;
+}
+.doc th {
+  font-weight: 650;
+  border-bottom-color: var(--line-strong);
+}
+.doc th[align="right"],
+.doc td[align="right"] {
+  text-align: right;
+}
+.doc th[align="center"],
+.doc td[align="center"] {
+  text-align: center;
+}
+.doc th[align="right"],
+.doc td[align="right"] {
+  white-space: nowrap;
+}
+.doc td:last-child,
+.doc th:last-child {
+  padding-right: 0;
+}
+
+.doc img {
+  max-width: 100%;
+  height: auto;
+}
+
+.doc details > summary {
+  cursor: pointer;
+}
+.doc details[open] > summary {
+  margin-bottom: 0.4em;
+}
+
+.doc dt {
+  font-weight: 650;
+}
+.doc dd {
+  margin: 0 0 0.5em 1.4em;
+}
+
+.doc section.footnotes {
+  margin-top: 3em;
+  padding-top: 1em;
+  border-top: 1px solid var(--line);
+  font-size: 0.9em;
+  color: var(--fg-2);
+}
+.doc section.footnotes ol {
+  padding-left: 1.4em;
+}
+.doc sup {
+  line-height: 0;
+}
+
+/* Images and diagrams that are not loaded. */
+.media-note {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  max-width: 100%;
+  padding: 0.45em 0.7em;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--fg-2);
+  font: 13px / 1.45 var(--font-ui);
+  vertical-align: middle;
+}
+.media-note .src {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.media-note button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+}
+
+figure.diagram {
+  margin-left: 0;
+  margin-right: 0;
+}
+figure.diagram img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.diagram-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: baseline;
+  padding: 0.6em 0.8em;
+  margin-bottom: 0.5em;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  font: 13px / 1.45 var(--font-ui);
+  color: var(--fg-2);
+}
+.diagram-note .msg {
+  flex: 1 1 30ch;
+  color: var(--fg);
+}
+.diagram-note .detail {
+  flex-basis: 100%;
+  font: 12px var(--font-mono);
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+.diagram-pending {
+  min-height: 3em;
+  color: var(--fg-3);
+  font: 13px var(--font-ui);
+}
+
+/* Revision marks: change bars in the gutter for the last external update. */
+.rev-layer {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--gutter);
+  pointer-events: none;
+}
+.rev-mark {
+  position: absolute;
+  right: 22px;
+  width: 2px;
+  background: var(--rev);
+}
+.rev-mark time {
+  position: absolute;
+  right: 9px;
+  top: -1px;
+  font: 11px var(--font-mono);
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+@media (max-width: 860px) {
+  .rev-mark {
+    right: 14px;
+  }
+  .rev-mark time {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  .rev-mark {
+    right: 8px;
+  }
+}
+
+/* Search hits in the preview. */
+.find-hit {
+  background: var(--hit);
+  color: inherit;
+  border-radius: 2px;
+}
+.find-hit[data-current] {
+  background: var(--hit-current);
+  color: var(--hit-current-fg);
+}
+
+/* Syntax highlighting (lezer classHighlighter). */
+.tok-keyword,
+.tok-modifier,
+.tok-controlKeyword,
+.tok-operatorKeyword {
+  color: var(--syn-keyword);
+}
+.tok-string,
+.tok-string2,
+.tok-inserted {
+  color: var(--syn-string);
+}
+.tok-number,
+.tok-bool,
+.tok-atom,
+.tok-literal {
+  color: var(--syn-number);
+}
+.tok-comment {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+.tok-variableName.tok-definition,
+.tok-function {
+  color: var(--syn-function);
+}
+.tok-typeName,
+.tok-className,
+.tok-namespace {
+  color: var(--syn-type);
+}
+.tok-propertyName {
+  color: var(--syn-property);
+}
+.tok-operator,
+.tok-punctuation {
+  color: var(--syn-operator);
+}
+.tok-meta,
+.tok-macroName {
+  color: var(--syn-meta);
+}
+.tok-heading {
+  color: var(--syn-heading);
+  font-weight: 650;
+}
+.tok-link,
+.tok-url {
+  color: var(--syn-link);
+}
+.tok-emphasis {
+  font-style: italic;
+}
+.tok-strong {
+  font-weight: 650;
+}
+.tok-deleted,
+.tok-invalid {
+  color: var(--syn-invalid);
+}
+.tok-labelName,
+.tok-variableName2 {
+  color: var(--syn-attr);
+}
+
+/* Split view: the preview is narrow, so the gutter shrinks to the bars. */
+.app[data-view="split"] {
+  --gutter: 36px;
+}
+.app[data-view="split"] .rev-mark {
+  right: 14px;
+}
+.app[data-view="split"] .rev-mark time {
+  display: none;
+}

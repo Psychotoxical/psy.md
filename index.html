@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en" data-theme="mocha">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>psy.md</title>
+  </head>
+  <body>
+    <div id="app" class="app" data-view="preview" data-toc="on" data-empty>
+      <header class="head">
+        <button id="file-btn" class="file-btn" type="button" aria-haspopup="menu" aria-expanded="false" data-i18n-title="head.file">
+          <span id="file-name" class="file-name" data-i18n="head.noFile">No file</span>
+          <span id="file-dir" class="file-dir"></span>
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
+        </button>
+        <div id="head-section" class="head-section" aria-hidden="true"></div>
+        <div id="find" class="find" role="search" hidden>
+          <input id="find-input" type="text" autocomplete="off" spellcheck="false" data-i18n-placeholder="find.placeholder" data-i18n-label="find.label" />
+          <output id="find-count" aria-live="polite"></output>
+          <button id="find-prev" class="icon-btn" type="button" data-i18n-label="find.prev" data-i18n-title="find.prev">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4" /></svg>
+          </button>
+          <button id="find-next" class="icon-btn" type="button" data-i18n-label="find.next" data-i18n-title="find.next">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
+          </button>
+          <button id="find-close" class="icon-btn" type="button" data-i18n-label="find.close" data-i18n-title="find.close">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" /></svg>
+          </button>
+        </div>
+        <div class="head-right">
+          <span id="status" class="status" role="status" aria-live="polite">
+            <i id="status-sq" class="sq" data-state="none"></i>
+            <span id="status-text" class="status-text"></span>
+          </span>
+          <div id="views" class="views" role="group" data-i18n-label="view.label">
+            <button type="button" data-view="preview" aria-pressed="true" data-i18n="view.preview">Preview</button>
+            <button type="button" data-view="split" aria-pressed="false" data-i18n="view.split">Split</button>
+            <button type="button" data-view="source" aria-pressed="false" data-i18n="view.source">Source</button>
+          </div>
+          <button id="more-btn" class="icon-btn" type="button" aria-haspopup="menu" aria-expanded="false" data-i18n-label="head.more" data-i18n-title="head.more">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h.01M8 8h.01M13 8h.01" stroke-width="2.4" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="banner" class="banner" hidden></div>
+
+      <div class="body">
+        <nav id="toc" class="toc" data-i18n-label="toc.title">
+          <h2 data-i18n="toc.title">Contents</h2>
+          <ol id="toc-list"></ol>
+          <p id="toc-empty" class="toc-empty" data-i18n="toc.empty" hidden>No headings</p>
+        </nav>
+        <main id="main" class="main">
+          <section id="pane-editor" class="pane pane-editor" data-i18n-label="editor.label"></section>
+          <div id="splitter" class="splitter" role="separator" tabindex="0" aria-orientation="vertical" aria-valuemin="20" aria-valuemax="80" aria-valuenow="50" data-i18n-label="split.label"></div>
+          <section id="pane-preview" class="pane pane-preview" tabindex="-1" data-i18n-label="preview.label">
+            <article id="doc" class="doc"></article>
+          </section>
+          <section id="empty" class="pane empty">
+            <div class="empty-inner">
+              <h1 data-i18n="empty.title">Open a Markdown file</h1>
+              <p data-i18n="empty.body"></p>
+              <p id="empty-notice" class="notice" hidden><i class="sq" data-state="none"></i><span id="empty-notice-text"></span></p>
+              <div class="empty-actions">
+                <button id="empty-open" class="btn btn-primary" type="button" data-i18n="empty.open">Open file…</button>
+                <span class="hint"><kbd id="empty-kbd">Ctrl+O</kbd> · <span data-i18n="empty.drop"></span></span>
+              </div>
+              <div id="empty-recent" class="recent" hidden>
+                <h2 data-i18n="empty.recent">Recent files</h2>
+                <ol id="empty-recent-list"></ol>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <footer class="foot">
+        <span id="foot-left" class="foot-left" role="status" aria-live="polite"></span>
+        <span id="foot-right" class="foot-right"></span>
+      </footer>
+    </div>
+
+    <div id="menu" class="menu" role="menu" hidden></div>
+    <dialog id="dialog" class="dialog" aria-labelledby="dialog-title"></dialog>
+    <dialog id="settings" class="dialog settings" aria-labelledby="settings-title"></dialog>
+    <div id="drop" class="drop" hidden><span id="drop-text"></span></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

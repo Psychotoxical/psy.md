@@ -1,0 +1,30 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "What the psy.md main window may call. Document content never runs script, so this list only serves the app's own frontend code.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-load-state",
+    "allow-save-settings",
+    "allow-save-session",
+    "allow-open-document",
+    "allow-close-document",
+    "allow-render-markdown",
+    "allow-save-document",
+    "allow-pick-open-file",
+    "allow-pick-save-path",
+    "allow-resolve-link",
+    "allow-open-external",
+    "allow-set-external-images",
+    "allow-grant-folder",
+    "allow-frontend-ready",
+    "allow-close-ack",
+    "allow-confirm-close",
+    "allow-set-window-theme",
+    "allow-set-title",
+    "allow-set-language",
+    "allow-perf-mark"
+  ]
+}

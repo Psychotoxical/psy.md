@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-external-images"
+description = "Enables the set_external_images command without any pre-configured scope."
+commands.allow = ["set_external_images"]
+
+[[permission]]
+identifier = "deny-set-external-images"
+description = "Denies the set_external_images command without any pre-configured scope."
+commands.deny = ["set_external_images"]
