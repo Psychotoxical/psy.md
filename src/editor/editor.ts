@@ -14,7 +14,7 @@ import {
   search,
   setSearchQuery,
 } from "@codemirror/search";
-import { Annotation, Compartment, EditorState } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
   drawSelection,
   EditorView,
@@ -83,42 +83,56 @@ export interface EditorHooks {
 export class Editor {
   readonly view: EditorView;
   private readonly historyCompartment = new Compartment();
+  private readonly extensions: Extension[];
   private query = "";
 
   constructor(parent: HTMLElement, text: string, hooks: EditorHooks, label: string) {
+    this.extensions = [
+      lineNumbers(),
+      highlightActiveLineGutter(),
+      highlightActiveLine(),
+      drawSelection(),
+      EditorView.lineWrapping,
+      this.historyCompartment.of(history()),
+      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      markdown({ base: markdownLanguage, codeLanguages: languages, pasteURLAsLink: false }),
+      syntaxHighlighting(markdownStyle),
+      syntaxHighlighting(classHighlighter),
+      search({ createPanel: () => ({ dom: document.createElement("div") }) }),
+      theme,
+      EditorView.contentAttributes.of({ "aria-label": label, spellcheck: "false" }),
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged && !u.transactions.some((tr) => tr.annotation(External))) {
+          hooks.onChange(u.state.doc.toString());
+        }
+      }),
+      EditorView.domEventHandlers({
+        wheel: () => hooks.onUserInput(),
+        keydown: () => hooks.onUserInput(),
+        mousedown: () => hooks.onUserInput(),
+        touchstart: () => hooks.onUserInput(),
+      }),
+    ];
     this.view = new EditorView({
       parent,
-      state: EditorState.create({
-        doc: text,
-        extensions: [
-          lineNumbers(),
-          highlightActiveLineGutter(),
-          highlightActiveLine(),
-          drawSelection(),
-          EditorView.lineWrapping,
-          this.historyCompartment.of(history()),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-          markdown({ base: markdownLanguage, codeLanguages: languages, pasteURLAsLink: false }),
-          syntaxHighlighting(markdownStyle),
-          syntaxHighlighting(classHighlighter),
-          search({ createPanel: () => ({ dom: document.createElement("div") }) }),
-          theme,
-          EditorView.contentAttributes.of({ "aria-label": label, spellcheck: "false" }),
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged && !u.transactions.some((tr) => tr.annotation(External))) {
-              hooks.onChange(u.state.doc.toString());
-            }
-          }),
-          EditorView.domEventHandlers({
-            wheel: () => hooks.onUserInput(),
-            keydown: () => hooks.onUserInput(),
-            mousedown: () => hooks.onUserInput(),
-            touchstart: () => hooks.onUserInput(),
-          }),
-        ],
-      }),
+      state: EditorState.create({ doc: text, extensions: this.extensions }),
     });
     this.view.scrollDOM.addEventListener("scroll", () => hooks.onScroll(), { passive: true });
+  }
+
+  /** The state of the shown document, kept per tab (undo history included). */
+  snapshot(): EditorState {
+    return this.view.state;
+  }
+
+  /**
+   * Shows another tab: its kept state, or a fresh one. `text` wins over the
+   * kept state when the file changed while the tab was in the background.
+   */
+  load(state: EditorState | null, text: string): void {
+    this.view.setState(state ?? EditorState.create({ doc: text, extensions: this.extensions }));
+    this.setText(text, false);
+    if (this.query) this.setQuery(this.query);
   }
 
   get text(): string {

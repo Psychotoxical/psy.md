@@ -2,6 +2,7 @@
 // contents and settings together. All file and window effects go through
 // ./ipc; all document state changes go through ./doc/model.
 
+import type { EditorState } from "@codemirror/state";
 import { summarizeChange } from "./doc/change";
 import {
   type DiskVersion,
@@ -17,7 +18,7 @@ import { type DocEvent, ipc, isCmdError, type StartupState } from "./ipc";
 import { type Action, menuOwnsShortcut, type Platform, shortcutFor, shortcutLabel } from "./keys";
 import { relabel } from "./preview/decorate";
 import { classifyHref } from "./preview/links";
-import { Preview, type ShowResult } from "./preview/preview";
+import { type KeptMarks, Preview, type ShowResult } from "./preview/preview";
 import { FindBar } from "./search/findbar";
 import { PreviewSearch } from "./search/preview-search";
 import {
@@ -32,6 +33,8 @@ import {
 } from "./settings";
 import { createScrollGuard } from "./split/scrollsync";
 import { Splitter } from "./split/split";
+import { TabBar, type TabState } from "./tabs/tabbar";
+import { activeAfterClose, ClosedTabs, type CloseKind, findTab, toClose } from "./tabs/tabs";
 import { Toc, type TocEntry } from "./toc/toc";
 import { ask, isDialogOpen } from "./ui/dialog";
 import { byId, h } from "./ui/dom";
@@ -59,13 +62,45 @@ function lineCount(text: string): number {
   return text.endsWith("\n") ? n - 1 : n;
 }
 
+type FootLeft =
+  | { kind: "saved"; at: number }
+  | {
+      kind: "updated";
+      at: number;
+      since: number | null;
+      count: number;
+      removed: boolean;
+      sections: TocEntry[];
+    }
+  | { kind: "conflict"; at: number; where: string };
+
+/** One open file. Only the active tab is on screen; the others keep their state here. */
+interface Tab {
+  doc: DocState;
+  watchError: string | null;
+  footLeft: FootLeft | null;
+  conflictWhere: string;
+  /** Editor state with its own undo history, once the editor has shown this tab. */
+  editorState: EditorState | null;
+  /** Reading position: source line at the top. */
+  line: number;
+  marks: KeptMarks | null;
+  /** Block keys on screen when the tab was last shown; null if never shown. */
+  seen: Set<string> | null;
+  /** Another program changed the file while the tab was in the background. */
+  changedAt: number | null;
+  warned: boolean;
+}
+
 export class App {
   private readonly app = byId("app");
   private readonly platform: Platform;
   private settings: Settings;
   private session: Session;
-  private doc: DocState | null = null;
-  private watchError: string | null = null;
+  private tabs: Tab[] = [];
+  private active: Tab | null = null;
+  private readonly closed = new ClosedTabs();
+  private readonly tabBar: TabBar;
   private editor: Editor | null = null;
   private editorLoading: Promise<Editor> | null = null;
   private readonly preview: Preview;
@@ -79,23 +114,34 @@ export class App {
   private saving = false;
   /** The running save or save as; opening and closing wait for it. */
   private saveJob: Promise<boolean> | null = null;
-  private footLeft:
-    | { kind: "saved"; at: number }
-    | {
-        kind: "updated";
-        at: number;
-        since: number | null;
-        count: number;
-        removed: boolean;
-        sections: TocEntry[];
-      }
-    | { kind: "conflict"; at: number; where: string }
-    | null = null;
   /** The reader interacted with the window since the last external update. */
   private looked = true;
-  private conflictWhere = "";
   private wheelAcc = 0;
   private lastMissing: string | null = null;
+
+  // The document state of the tab on screen; the rest of the controller
+  // works on it as it did with a single document.
+  private get doc(): DocState | null {
+    return this.active?.doc ?? null;
+  }
+  private set doc(d: DocState | null) {
+    if (this.active && d) this.active.doc = d;
+  }
+  private get footLeft(): FootLeft | null {
+    return this.active?.footLeft ?? null;
+  }
+  private set footLeft(f: FootLeft | null) {
+    if (this.active) this.active.footLeft = f;
+  }
+  private get conflictWhere(): string {
+    return this.active?.conflictWhere ?? "";
+  }
+  private set conflictWhere(w: string) {
+    if (this.active) this.active.conflictWhere = w;
+  }
+  private get watchError(): string | null {
+    return this.active?.watchError ?? null;
+  }
 
   constructor(state: StartupState) {
     this.platform = state.platform;
@@ -103,6 +149,7 @@ export class App {
     this.session = readSession(state.session);
 
     this.preview = new Preview(byId("pane-preview"), byId("doc"), {
+      sessionId: () => this.active?.doc.file.sessionId ?? 0,
       marksEnabled: () => this.settings.marks,
       diagramTheme: () => this.diagramTheme(),
       diagramFont: () => getComputedStyle(document.documentElement).getPropertyValue("--font-ui"),
@@ -137,11 +184,21 @@ export class App {
       this.session.split = r;
       this.persistSession();
     });
+    const at = (i: number, fn: (tab: Tab) => void) => {
+      const tab = this.tabs[i];
+      if (tab) fn(tab);
+    };
+    this.tabBar = new TabBar(byId("tabs"), {
+      select: (i) => at(i, (tab) => void this.activate(tab)),
+      close: (i) => at(i, (tab) => void this.closeTab(tab)),
+      menu: (i, anchor) => this.openTabMenu(i, anchor),
+      add: () => void this.openDialog(),
+    });
   }
 
   // ------------------------------------------------------------- startup
 
-  async start(startupFile: string | null): Promise<void> {
+  async start(startupFiles: string[]): Promise<void> {
     setLanguage(this.settings.language);
     applyI18n();
     this.applyAppearance();
@@ -158,18 +215,24 @@ export class App {
     });
     void ipc.setLanguage(language());
 
-    const file = startupFile ?? this.session.lastFile;
-    const ready = file
-      ? this.openPath(file, {
-          guard: false,
-          restoreLine: !startupFile ? this.session.line : undefined,
-          quietMissing: !startupFile,
-        })
-      : Promise.resolve(false);
+    // Tabs of the last session open in the background (read and watched, not
+    // rendered); files handed over at start open after them.
+    const restore = this.session.tabs;
+    const wanted = restore[this.session.activeTab]?.path ?? null;
+    for (const t of restore) {
+      await this.openPath(t.path, { background: true, quietMissing: true, line: t.line });
+    }
+    for (const p of startupFiles) await this.openPath(p, { background: true });
+    const last = startupFiles.at(-1);
+    const paths = this.tabs.map((t) => t.doc.file.path);
+    const pick = last ?? wanted;
+    const first = this.tabs[pick ? Math.max(0, findTab(paths, pick)) : 0];
+    if (!first && wanted) this.lastMissing = wanted;
     // Show the window as soon as the document is on screen, at the latest
     // after half a second for very large files.
+    const ready = first ? this.activate(first) : Promise.resolve();
     await Promise.race([ready, new Promise((r) => setTimeout(r, 500))]);
-    if (!this.doc) this.showEmpty();
+    if (!this.active) this.showEmpty();
     await ipc.frontendReady();
     void ipc.perfMark("ui-ready", String(this.preview.blockCount));
     if (this.session.view !== "preview" && this.doc) void this.setView(this.session.view);
@@ -269,38 +332,47 @@ export class App {
   }
 
   async openDialog(): Promise<void> {
-    if (!(await this.confirmUnsaved())) return;
     try {
       const path = await ipc.pickOpenFile();
-      if (path) await this.openPath(path, { guard: false });
+      if (path) await this.openPath(path);
     } catch (e) {
       toast(errorText(e), "error");
     }
   }
 
+  /**
+   * Opens a file in a new tab next to the active one; a file that is open
+   * already only gets its tab shown. `background` opens without showing it.
+   */
   async openPath(
     path: string,
     opts: {
-      guard?: boolean;
-      restoreLine?: number;
+      background?: boolean;
+      line?: number;
       quietMissing?: boolean;
       fragment?: string | null;
     } = {},
   ): Promise<boolean> {
     await this.settle();
-    if (opts.guard !== false && !(await this.confirmUnsaved())) return false;
+    const existing = this.tabs[findTab(this.tabPaths(), path)];
+    if (existing) {
+      if (!opts.background) await this.activate(existing, opts.fragment ?? null);
+      return true;
+    }
     let opened: Awaited<ReturnType<typeof ipc.openDocument>>;
     try {
       opened = await ipc.openDocument(path);
     } catch (e) {
-      if (opts.quietMissing && isCmdError(e) && e.code === "not-found") {
-        this.lastMissing = path;
-        this.session.lastFile = null;
-        this.persistSession();
-      } else {
-        toast(errorText(e), "error");
-      }
+      if (opts.quietMissing && isCmdError(e) && e.code === "not-found") return false;
+      toast(errorText(e), "error");
       return false;
+    }
+    // The shell spells paths one way; the same file may be open under another spelling.
+    const same = this.tabs[findTab(this.tabPaths(), opened.path)];
+    if (same) {
+      void ipc.closeDocument(opened.sessionId);
+      if (!opts.background) await this.activate(same, opts.fragment ?? null);
+      return true;
     }
     const version: DiskVersion = {
       text: opened.text,
@@ -309,39 +381,202 @@ export class App {
       eol: opened.eol,
       mixedEol: opened.mixedEol,
     };
-    this.doc = openDoc(
-      { sessionId: opened.sessionId, path: opened.path, name: opened.name, dir: opened.dir },
-      version,
-    );
-    this.watchError = opened.watchError;
+    const tab: Tab = {
+      doc: openDoc(
+        { sessionId: opened.sessionId, path: opened.path, name: opened.name, dir: opened.dir },
+        version,
+      ),
+      watchError: opened.watchError,
+      footLeft: null,
+      conflictWhere: "",
+      editorState: null,
+      line: opts.line ?? 1,
+      marks: null,
+      seen: null,
+      changedAt: null,
+      warned: false,
+    };
+    const at =
+      this.active && !opts.background ? this.tabs.indexOf(this.active) + 1 : this.tabs.length;
+    this.tabs.splice(at, 0, tab);
+    this.closed.forget(opened.path);
     this.lastMissing = null;
-    this.footLeft = null;
-    this.session.lastFile = opened.path;
     this.session.recent = addRecent(this.session.recent, opened.path);
+    if (opts.background) this.renderTabs();
+    else await this.activate(tab, opts.fragment ?? null);
     this.persistSession();
-    hideToast();
-    this.find.close();
-
-    delete this.app.dataset.empty;
-    byId("empty").hidden = true;
-    this.editor?.setText(version.text, true);
-    try {
-      const res = await this.preview.show(version.text, { reset: true, line: opts.restoreLine });
-      if (res) {
-        this.toc.set(res.headings);
-        this.trackSection();
-      }
-    } catch (e) {
-      toast(errorText(e), "error");
-    }
-    if (opts.fragment) this.goToAnchor(opts.fragment);
-    if (this.view() !== "preview" && this.editor && opts.restoreLine) {
-      this.editor.scrollToLine(opts.restoreLine);
-    }
-    if (this.watchError) toast(t("watch.off", { reason: this.watchError }), "error");
-    this.refreshChrome();
-    void ipc.perfMark("doc-shown", String(this.preview.blockCount));
     return true;
+  }
+
+  private tabPaths(): string[] {
+    return this.tabs.map((t) => t.doc.file.path);
+  }
+
+  /** Keeps what the reader sees of the active tab, before another one is shown. */
+  private stashActive(): void {
+    const tab = this.active;
+    if (!tab || this.app.dataset.empty !== undefined) return;
+    tab.line = this.currentLine();
+    tab.editorState = this.editor?.snapshot() ?? tab.editorState;
+    tab.marks = this.preview.keepMarks();
+    tab.seen = this.preview.keys();
+  }
+
+  /** Shows a tab: its text, reading position, undo history and change marks. */
+  private async activate(tab: Tab, fragment: string | null = null): Promise<void> {
+    if (tab !== this.active) {
+      this.stashActive();
+      this.active = tab;
+      void ipc.setActive(tab.doc.file.sessionId);
+      hideToast();
+      this.find.close();
+      delete this.app.dataset.empty;
+      byId("empty").hidden = true;
+      this.editor?.load(tab.editorState, tab.doc.buffer);
+      this.preview.clear();
+      this.renderTabs();
+      this.refreshChrome();
+      try {
+        const res = await this.preview.show(tab.doc.buffer, { reset: true, line: tab.line });
+        if (res && this.active === tab) {
+          this.toc.set(res.headings);
+          this.preview.restoreMarks(tab.marks, tab.seen, tab.changedAt);
+          if (tab.changedAt !== null) this.noteUpdate(res);
+          tab.changedAt = null;
+          tab.marks = null;
+          this.trackSection();
+        }
+      } catch (e) {
+        toast(errorText(e), "error");
+      }
+      if (this.active !== tab) return;
+      if (this.view() !== "preview" && this.editor) this.editor.scrollToLine(tab.line);
+      if (tab.watchError && !tab.warned) {
+        tab.warned = true;
+        toast(t("watch.off", { reason: tab.watchError }), "error");
+      }
+      this.renderTabs();
+      this.refreshChrome();
+      this.persistSession();
+      void ipc.perfMark("doc-shown", String(this.preview.blockCount));
+    }
+    if (fragment) this.goToAnchor(fragment);
+  }
+
+  /** Closes a tab, asking first about unsaved changes; false if the reader cancelled. */
+  private async closeTab(tab: Tab): Promise<boolean> {
+    await this.settle();
+    if (!this.tabs.includes(tab)) return true;
+    if (isDirty(tab.doc)) {
+      if (tab !== this.active) await this.activate(tab);
+      if (!(await this.confirmUnsaved())) return false;
+    }
+    const i = this.tabs.indexOf(tab);
+    if (i < 0) return true;
+    const wasActive = tab === this.active;
+    const shown = this.active ? this.tabs.indexOf(this.active) : i;
+    const next = activeAfterClose(this.tabs.length, i, shown);
+    this.closed.push(tab.doc.file.path);
+    this.tabs.splice(i, 1);
+    void ipc.closeDocument(tab.doc.file.sessionId);
+    if (wasActive) {
+      this.active = null;
+      const show = this.tabs[next];
+      if (show) await this.activate(show);
+      else {
+        this.preview.clear();
+        this.showEmpty();
+      }
+    }
+    this.renderTabs();
+    this.persistSession();
+    return true;
+  }
+
+  private async closeTabs(kind: CloseKind, at: number): Promise<void> {
+    const targets = toClose(kind, this.tabs.length, at).map((i) => this.tabs[i]);
+    for (const tab of targets) {
+      if (tab && !(await this.closeTab(tab))) return;
+    }
+  }
+
+  private async reopenClosed(): Promise<void> {
+    const path = this.closed.pop();
+    if (path) await this.openPath(path);
+  }
+
+  private cycleTab(dir: 1 | -1): void {
+    if (!this.active || this.tabs.length < 2) return;
+    const i = this.tabs.indexOf(this.active);
+    const next = this.tabs[(i + dir + this.tabs.length) % this.tabs.length];
+    if (next) void this.activate(next);
+  }
+
+  private openTabMenu(i: number, anchor: HTMLElement): void {
+    const tab = this.tabs[i];
+    if (!tab) return;
+    const n = this.tabs.length;
+    const reveal =
+      this.platform === "macos"
+        ? t("tabs.revealMac")
+        : this.platform === "windows"
+          ? t("tabs.revealWin")
+          : t("tabs.revealLinux");
+    const copyPath = () => {
+      void navigator.clipboard.writeText(this.showPath(tab.doc.file.path)).catch(() => {});
+    };
+    const revealIt = () => {
+      void ipc.revealDocument(tab.doc.file.sessionId).catch((e) => toast(errorText(e), "error"));
+    };
+    openMenu(anchor, [
+      {
+        label: t("tabs.close"),
+        shortcut: this.keyLabel("Mod+W"),
+        action: () => void this.closeTab(tab),
+      },
+      {
+        label: t("tabs.closeOthers"),
+        disabled: n < 2,
+        action: () => void this.closeTabs("others", i),
+      },
+      {
+        label: t("tabs.closeRight"),
+        disabled: i >= n - 1,
+        action: () => void this.closeTabs("right", i),
+      },
+      { label: t("tabs.closeAll"), action: () => void this.closeTabs("all", i) },
+      "separator",
+      { label: t("tabs.copyPath"), action: copyPath },
+      { label: reveal, action: revealIt },
+      "separator",
+      {
+        label: t("tabs.reopen"),
+        shortcut: this.keyLabel("Mod+Shift+T"),
+        disabled: !this.closed.has(),
+        action: () => void this.reopenClosed(),
+      },
+    ]);
+  }
+
+  private tabState(tab: Tab): TabState {
+    const d = tab.doc;
+    if (d.disk === "missing") return "missing";
+    if (d.disk === "error") return "error";
+    if (d.pending) return "conflict";
+    if (isDirty(d)) return "unsaved";
+    if (tab.changedAt !== null) return "changed";
+    return "current";
+  }
+
+  private renderTabs(): void {
+    this.tabBar.render(
+      this.tabs.map((tab) => ({
+        name: tab.doc.file.name,
+        path: this.showPath(tab.doc.file.path),
+        state: this.tabState(tab),
+        active: tab === this.active,
+      })),
+    );
   }
 
   private showEmpty(): void {
@@ -411,7 +646,13 @@ export class App {
   }
 
   private onDocEvent(e: DocEvent): void {
-    if (!this.doc || e.sessionId !== this.doc.file.sessionId) return;
+    const tab = this.tabs.find((x) => x.doc.file.sessionId === e.sessionId);
+    if (!tab) return;
+    if (tab !== this.active || this.app.dataset.empty !== undefined) {
+      this.onBackgroundEvent(tab, e);
+      return;
+    }
+    if (!this.doc) return;
     const before = this.doc;
     if (e.kind === "changed" && e.text !== undefined && e.token) {
       this.doc = reduce(this.doc, {
@@ -444,6 +685,37 @@ export class App {
       this.doc = reduce(this.doc, { type: "readError", seq: e.seq, problem: e.problem });
     }
     this.refreshChrome();
+    this.renderTabs();
+  }
+
+  /** A file changed while its tab is not on screen: keep the state, mark the tab. */
+  private onBackgroundEvent(tab: Tab, e: DocEvent): void {
+    const before = tab.doc;
+    if (e.kind === "changed" && e.text !== undefined && e.token) {
+      tab.doc = reduce(tab.doc, {
+        type: "external",
+        seq: e.seq,
+        version: {
+          text: e.text,
+          token: e.token,
+          bom: e.bom ?? false,
+          eol: e.eol ?? "lf",
+          mixedEol: e.mixedEol ?? false,
+        },
+        at: Date.now(),
+      });
+      if (tab.doc.buffer !== before.buffer) {
+        tab.changedAt = Date.now();
+      } else if (tab.doc.pending && tab.doc.pending !== before.pending) {
+        tab.conflictWhere = this.describeChange(tab.doc.base.text, tab.doc.pending.text);
+        tab.footLeft = { kind: "conflict", at: Date.now(), where: tab.conflictWhere };
+      }
+    } else if (e.kind === "missing") {
+      tab.doc = reduce(tab.doc, { type: "missing", seq: e.seq });
+    } else if (e.kind === "error" && e.problem) {
+      tab.doc = reduce(tab.doc, { type: "readError", seq: e.seq, problem: e.problem });
+    }
+    this.renderTabs();
   }
 
   private noteUpdate(res: ShowResult): void {
@@ -566,13 +838,29 @@ export class App {
     return this.track(this.writeDocOnce(force));
   }
 
+  /** The tab still shows the document a save was started for. */
+  private stillOpen(tab: Tab, sessionId: number): boolean {
+    return this.tabs.includes(tab) && tab.doc.file.sessionId === sessionId;
+  }
+
+  /** After a save: the tab's marks no longer mean anything. */
+  private afterSave(tab: Tab): void {
+    tab.footLeft = { kind: "saved", at: Date.now() };
+    tab.marks = null;
+    tab.changedAt = null;
+    if (tab === this.active) {
+      this.preview.clearMarks();
+      this.toc.markChanged(new Set());
+    }
+  }
+
   private async writeDocOnce(force: boolean): Promise<boolean> {
-    if (!this.doc) return false;
-    // The answer belongs to this document; another one may be open by then.
-    const sessionId = this.doc.file.sessionId;
-    const isSame = () => this.doc?.file.sessionId === sessionId;
-    const text = this.doc.buffer;
-    const base = this.doc.base;
+    const tab = this.active;
+    if (!tab) return false;
+    // The answer belongs to this tab, even if another one is on screen by then.
+    const sessionId = tab.doc.file.sessionId;
+    const text = tab.doc.buffer;
+    const base = tab.doc.base;
     this.saving = true;
     this.refreshChrome();
     try {
@@ -585,24 +873,24 @@ export class App {
         force,
         targetPath: null,
       });
-      if (!this.doc || !isSame()) return false;
-      this.doc = reduce(this.doc, { type: "saved", text, token: saved.token, at: Date.now() });
-      this.footLeft = { kind: "saved", at: Date.now() };
-      this.preview.clearMarks();
-      this.toc.markChanged(new Set());
+      if (!this.stillOpen(tab, sessionId)) return false;
+      tab.doc = reduce(tab.doc, { type: "saved", text, token: saved.token, at: Date.now() });
+      this.afterSave(tab);
       return true;
     } catch (e) {
       if (isCmdError(e) && e.code === "conflict" && !force) {
         this.saving = false;
-        if (isSame() && (await this.confirmOverwrite())) return this.writeDocOnce(true);
+        const shown = this.active === tab && this.stillOpen(tab, sessionId);
+        if (shown && (await this.confirmOverwrite())) return this.writeDocOnce(true);
         return false;
       }
-      if (!isSame()) return false;
+      if (!this.stillOpen(tab, sessionId)) return false;
       toast(errorText(e), "error");
       return false;
     } finally {
       this.saving = false;
       this.refreshChrome();
+      this.renderTabs();
     }
   }
 
@@ -612,18 +900,19 @@ export class App {
   }
 
   private async saveAsOnce(): Promise<boolean> {
-    if (!this.doc) return false;
-    const sessionId = this.doc.file.sessionId;
+    const tab = this.active;
+    if (!tab) return false;
+    const sessionId = tab.doc.file.sessionId;
     let target: string | null;
     try {
-      target = await ipc.pickSavePath(this.doc.file.name);
+      target = await ipc.pickSavePath(tab.doc.file.name);
     } catch (e) {
       toast(errorText(e), "error");
       return false;
     }
-    if (!target || this.doc?.file.sessionId !== sessionId) return false;
-    const text = this.doc.buffer;
-    const base = this.doc.base;
+    if (!target || !this.stillOpen(tab, sessionId)) return false;
+    const text = tab.doc.buffer;
+    const base = tab.doc.base;
     this.saving = true;
     this.refreshChrome();
     try {
@@ -636,18 +925,15 @@ export class App {
         force: true,
         targetPath: target,
       });
-      if (this.doc?.file.sessionId === sessionId) {
-        this.doc = reduce(this.doc, {
+      if (this.stillOpen(tab, sessionId)) {
+        tab.doc = reduce(tab.doc, {
           type: "savedAs",
           text,
           token: saved.token,
           at: Date.now(),
           file: { sessionId: saved.sessionId, path: saved.path, name: saved.name, dir: saved.dir },
         });
-        this.footLeft = { kind: "saved", at: Date.now() };
-        this.preview.clearMarks();
-        this.toc.markChanged(new Set());
-        this.session.lastFile = saved.path;
+        this.afterSave(tab);
         this.session.recent = addRecent(this.session.recent, saved.path);
         this.persistSession();
       }
@@ -658,6 +944,7 @@ export class App {
     } finally {
       this.saving = false;
       this.refreshChrome();
+      this.renderTabs();
     }
   }
 
@@ -685,13 +972,18 @@ export class App {
   private async onCloseRequested(): Promise<void> {
     await ipc.closeAck();
     if (isDialogOpen()) return;
-    if (!(await this.confirmUnsaved())) return;
+    // Every tab with unsaved changes is shown and asked about in turn.
+    for (const tab of [...this.tabs]) {
+      if (!this.tabs.includes(tab) || !isDirty(tab.doc)) continue;
+      await this.activate(tab);
+      if (!(await this.confirmUnsaved())) return;
+    }
     const decided = this.doc?.buffer;
     this.rememberPosition();
     clearTimeout(this.sessionTimer);
     clearTimeout(this.settingsTimer);
     try {
-      await Promise.all([ipc.saveSession(this.session), ipc.saveSettings(this.settings)]);
+      await Promise.all([ipc.saveSession(this.sessionToStore()), ipc.saveSettings(this.settings)]);
     } catch {
       // Losing the session is acceptable; the document was handled above.
     }
@@ -725,8 +1017,9 @@ export class App {
           await ipc.openExternal(link.url);
           break;
         case "doc": {
-          const path = await ipc.resolveLink(link.path);
-          if (this.doc && path === this.doc.file.path) {
+          if (!this.doc) break;
+          const path = await ipc.resolveLink(this.doc.file.sessionId, link.path);
+          if (path === this.doc.file.path) {
             if (link.fragment) this.goToAnchor(link.fragment);
           } else {
             await this.openPath(path, { fragment: link.fragment });
@@ -780,13 +1073,13 @@ export class App {
         break;
       }
       case "allow-external":
-        await ipc.setExternalImages(true);
+        if (this.doc) await ipc.setExternalImages(this.doc.file.sessionId, true);
         await this.renderBuffer();
         break;
       case "allow-folder":
         if (el.dataset.dir) {
           try {
-            await ipc.grantFolder(el.dataset.dir);
+            if (this.doc) await ipc.grantFolder(this.doc.file.sessionId, el.dataset.dir);
             await this.renderBuffer();
           } catch (e) {
             toast(errorText(e), "error");
@@ -1030,6 +1323,8 @@ export class App {
       "zoom-out": "zoomOut",
       "zoom-reset": "zoomReset",
       settings: "settings",
+      "close-tab": "closeTab",
+      "reopen-tab": "reopenTab",
     };
     const action = map[id];
     if (action && !isDialogOpen()) this.run(action);
@@ -1086,6 +1381,18 @@ export class App {
       case "prevChange":
         this.stepChange(-1);
         return true;
+      case "closeTab":
+        if (this.active) void this.closeTab(this.active);
+        return true;
+      case "reopenTab":
+        void this.reopenClosed();
+        return true;
+      case "nextTab":
+        this.cycleTab(1);
+        return true;
+      case "prevTab":
+        this.cycleTab(-1);
+        return true;
     }
   }
 
@@ -1139,6 +1446,21 @@ export class App {
         disabled: !this.doc,
         action: () => void this.saveAs(),
       },
+      "separator",
+      {
+        label: t("menu.closeTab"),
+        shortcut: mod("Mod+W"),
+        disabled: !this.active,
+        action: () => {
+          if (this.active) void this.closeTab(this.active);
+        },
+      },
+      {
+        label: t("menu.reopenTab"),
+        shortcut: mod("Mod+Shift+T"),
+        disabled: !this.closed.has(),
+        action: () => void this.reopenClosed(),
+      },
     );
     openMenu(anchor, entries);
   }
@@ -1160,7 +1482,7 @@ export class App {
       "separator",
       {
         label: t("menu.contents"),
-        shortcut: mod("Mod+Shift+T"),
+        shortcut: mod("Mod+B"),
         checked: this.app.dataset.toc === "on",
         disabled: !this.doc,
         action: () => this.toggleToc(),
@@ -1394,7 +1716,17 @@ export class App {
 
   private persistSession(): void {
     clearTimeout(this.sessionTimer);
-    this.sessionTimer = setTimeout(() => void ipc.saveSession(this.session).catch(() => {}), 500);
+    this.sessionTimer = setTimeout(
+      () => void ipc.saveSession(this.sessionToStore()).catch(() => {}),
+      500,
+    );
+  }
+
+  /** The session with the open tabs, in order, and the one on screen. */
+  private sessionToStore(): Session {
+    this.session.tabs = this.tabs.map((tab) => ({ path: tab.doc.file.path, line: tab.line }));
+    this.session.activeTab = this.active ? this.tabs.indexOf(this.active) : -1;
+    return this.session;
   }
 
   private rememberTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1407,9 +1739,13 @@ export class App {
   }
 
   private rememberPosition(): void {
-    if (!this.doc) return;
+    if (this.active && this.app.dataset.empty === undefined) this.active.line = this.currentLine();
+  }
+
+  /** Source line at the top of the editor (in Source view) or the preview. */
+  private currentLine(): number {
     const line =
       this.view() === "source" && this.editor ? this.editor.topLine() : this.preview.topLine();
-    this.session.line = Math.max(1, Math.floor(line));
+    return Math.max(1, Math.floor(line));
   }
 }

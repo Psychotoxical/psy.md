@@ -21,6 +21,36 @@ describe("settings", () => {
     expect(s.recent).toEqual(["/a.md"]);
   });
 
+  it("restores the open tabs with their reading position and the active one", () => {
+    const s = readSession({
+      tabs: [{ path: "/a.md", line: 40 }, { path: "/b.md" }, { line: 3 }, "x"],
+      activeTab: 1,
+    });
+    expect(s.tabs).toEqual([
+      { path: "/a.md", line: 40 },
+      { path: "/b.md", line: 1 },
+    ]);
+    expect(s.activeTab).toBe(1);
+  });
+
+  it("opens a file only once even if it is stored twice", () => {
+    const s = readSession({ tabs: [{ path: "D:/a.md" }, { path: "d:\\A.md" }], activeTab: 1 });
+    expect(s.tabs).toEqual([{ path: "D:/a.md", line: 1 }]);
+    expect(s.activeTab).toBe(0);
+  });
+
+  it("takes over the single last file from before tabs", () => {
+    const s = readSession({ lastFile: "/old.md", line: 12 });
+    expect(s.tabs).toEqual([{ path: "/old.md", line: 12 }]);
+    expect(s.activeTab).toBe(0);
+  });
+
+  it("starts without tabs when nothing was open", () => {
+    const s = readSession({});
+    expect(s.tabs).toEqual([]);
+    expect(s.activeTab).toBe(-1);
+  });
+
   it("treats Windows paths that differ only in slashes or case as the same file", () => {
     const r = addRecent(["D:/Notes/Plan.md", "/home/a/x.md"], "d:\\notes\\plan.md");
     expect(r).toEqual(["d:\\notes\\plan.md", "/home/a/x.md"]);

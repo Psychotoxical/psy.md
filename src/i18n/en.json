@@ -155,5 +155,22 @@
   "menu.nextChange": "Next change",
   "menu.prevChange": "Previous change",
   "error.byteAt": "invalid byte at position {n}",
-  "toast.close": "Dismiss"
+  "toast.close": "Dismiss",
+  "tabs.label": "Open files",
+  "tabs.open": "Open a file",
+  "tabs.close": "Close",
+  "tabs.closeNamed": "Close {name}",
+  "tabs.closeOthers": "Close others",
+  "tabs.closeRight": "Close tabs to the right",
+  "tabs.closeAll": "Close all",
+  "tabs.copyPath": "Copy path",
+  "tabs.revealWin": "Show in Explorer",
+  "tabs.revealMac": "Show in Finder",
+  "tabs.revealLinux": "Show in file manager",
+  "tabs.reopen": "Reopen closed tab",
+  "tabs.changed": "Changed since you looked",
+  "menu.closeTab": "Close tab",
+  "menu.reopenTab": "Reopen closed tab",
+  "menu.nextTab": "Next tab",
+  "menu.prevTab": "Previous tab"
 }

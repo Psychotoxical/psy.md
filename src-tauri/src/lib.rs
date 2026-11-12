@@ -10,12 +10,12 @@ mod protocol;
 mod state;
 mod store;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::{DragDropEvent, Emitter, Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 
 use crate::state::AppState;
@@ -37,21 +37,52 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-fn startup_file() -> Option<PathBuf> {
-    std::env::args_os()
+/// The files in a command line (the first entry is the program), with
+/// relative paths taken from the folder the command was started in.
+fn file_args(args: impl IntoIterator<Item = String>, cwd: &Path) -> Vec<PathBuf> {
+    args.into_iter()
         .skip(1)
-        .find(|a| !a.to_string_lossy().starts_with('-'))
-        .map(PathBuf::from)
+        .filter(|a| !a.starts_with('-'))
+        .map(|a| {
+            let p = PathBuf::from(a);
+            if p.is_absolute() { p } else { cwd.join(p) }
+        })
+        .collect()
+}
+
+/// Opens files as tabs: at once if the interface runs, else at its start.
+fn open_files(app: &AppHandle, files: Vec<PathBuf>) {
+    let state = app.state::<AppState>();
+    if state.frontend_ready.load(Ordering::Relaxed) {
+        for p in files {
+            let _ = app.emit_to("main", "open-file", psymd_core::sanitize::display_path(&p));
+        }
+    } else if let Ok(mut f) = state.startup_files.lock() {
+        f.extend(files);
+    }
 }
 
 pub fn run() {
     perf::init();
     let state = AppState::default();
-    if let Ok(mut f) = state.startup_file.lock() {
-        *f = startup_file();
+    if let Ok(mut f) = state.startup_files.lock() {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        *f = file_args(
+            std::env::args_os().map(|a| a.to_string_lossy().into_owned()),
+            &cwd,
+        );
     }
 
     let app = tauri::Builder::default()
+        // First, so a second start hands its files over before anything else runs.
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            open_files(app, file_args(args, Path::new(&cwd)));
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
@@ -67,6 +98,8 @@ pub fn run() {
             commands::save_session,
             commands::open_document,
             commands::close_document,
+            commands::set_active,
+            commands::reveal_document,
             commands::render_markdown,
             commands::save_document,
             commands::pick_open_file,
@@ -136,11 +169,23 @@ pub fn run() {
                             markdown: false,
                         },
                     );
-                    if let Some(p) = paths.first() {
+                    // Every Markdown file becomes a tab; without any, the first
+                    // path still goes through so the reason is shown.
+                    let markdown: Vec<PathBuf> = paths
+                        .iter()
+                        .filter(|p| docfs::is_markdown_path(p))
+                        .cloned()
+                        .collect();
+                    let files = if markdown.is_empty() {
+                        paths.iter().take(1).cloned().collect()
+                    } else {
+                        markdown
+                    };
+                    for p in files {
                         let _ = window.emit_to(
                             "main",
                             "open-file",
-                            psymd_core::sanitize::display_path(p),
+                            psymd_core::sanitize::display_path(&p),
                         );
                     }
                 }
@@ -165,19 +210,39 @@ pub fn run() {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let RunEvent::Opened { urls } = &event {
             let paths: Vec<PathBuf> = urls.iter().filter_map(|u| u.to_file_path().ok()).collect();
-            if let Some(p) = paths.into_iter().next() {
-                let state = handle.state::<AppState>();
-                if state.frontend_ready.load(Ordering::Relaxed) {
-                    let _ =
-                        handle.emit_to("main", "open-file", psymd_core::sanitize::display_path(&p));
-                } else if let Ok(mut f) = state.startup_file.lock() {
-                    *f = Some(p);
-                }
-            }
+            open_files(handle, paths);
         }
         let _ = (handle, &event);
         if let RunEvent::Exit = event {
             perf::mark("exit", "");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_second_start_hands_over_all_its_files() {
+        let cwd = Path::new("work");
+        let files = file_args(args(&["psymd", "a.md", "--flag", "sub/b.md"]), cwd);
+        assert_eq!(files, [cwd.join("a.md"), cwd.join("sub/b.md")]);
+    }
+
+    #[test]
+    fn absolute_paths_stay_as_given() {
+        let abs = std::env::temp_dir().join("c.md");
+        let files = file_args(args(&["psymd", &abs.to_string_lossy()]), Path::new("work"));
+        assert_eq!(files, [abs]);
+    }
+
+    #[test]
+    fn a_start_without_files_opens_nothing() {
+        assert!(file_args(args(&["psymd"]), Path::new("work")).is_empty());
+    }
 }

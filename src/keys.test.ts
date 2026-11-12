@@ -38,6 +38,40 @@ const ev = (over: Partial<KeyInput>): KeyInput => ({
   ...over,
 });
 
+describe("shortcutFor: tabs", () => {
+  it("closes the tab with Mod+W", () => {
+    expect(shortcutFor(ev({ key: "w", code: "KeyW", ctrlKey: true }), "windows")).toBe("closeTab");
+    expect(shortcutFor(ev({ key: "w", code: "KeyW", metaKey: true }), "macos")).toBe("closeTab");
+  });
+
+  it("cycles tabs with Ctrl+Tab on every platform", () => {
+    expect(shortcutFor(ev({ key: "Tab", code: "Tab", ctrlKey: true }), "windows")).toBe("nextTab");
+    expect(
+      shortcutFor(ev({ key: "Tab", code: "Tab", ctrlKey: true, shiftKey: true }), "linux"),
+    ).toBe("prevTab");
+    expect(shortcutFor(ev({ key: "Tab", code: "Tab", ctrlKey: true }), "macos")).toBe("nextTab");
+  });
+
+  it("reopens the last closed tab with Mod+Shift+T, as in browsers", () => {
+    const e = ev({ key: "T", code: "KeyT", ctrlKey: true, shiftKey: true });
+    expect(shortcutFor(e, "windows")).toBe("reopenTab");
+  });
+
+  it("toggles Contents with Mod+B", () => {
+    expect(shortcutFor(ev({ key: "b", code: "KeyB", ctrlKey: true }), "windows")).toBe("toggleToc");
+  });
+
+  it("leaves plain Tab to the editor and focus order", () => {
+    expect(shortcutFor(ev({ key: "Tab", code: "Tab" }), "windows")).toBeNull();
+  });
+
+  it("lets the macOS menu own closing and reopening tabs, not cycling", () => {
+    expect(menuOwnsShortcut("closeTab", "macos")).toBe(true);
+    expect(menuOwnsShortcut("reopenTab", "macos")).toBe(true);
+    expect(menuOwnsShortcut("nextTab", "macos")).toBe(false);
+  });
+});
+
 describe("shortcutFor", () => {
   it("maps every common plus key to zoom in", () => {
     for (const e of [

@@ -77,7 +77,7 @@ mapping, numbering, settings parsing) have unit tests.
   disk version waits as "pending" and the conflict bar offers keep, save as,
   or an explicitly confirmed discard. Without edits the file reloads.
 - **No autosave** to the source file, no claim that unsaved text is kept
-  anywhere. Closing or opening another file with unsaved edits asks first.
+  anywhere. Closing a tab or the window with unsaved edits asks first.
 
 ## Live updates
 
@@ -97,6 +97,32 @@ The watcher ([crates/core/src/watcher.rs](../crates/core/src/watcher.rs)):
 
 Events carry a sequence number and a session id; the frontend drops stale
 ones. Render requests carry an id; only the newest reply is applied.
+
+## Tabs
+
+Every open file is a tab and has its own backend session (watcher, image
+folders, external-image choice), kept in `AppState.docs` by session id. Only
+the active tab is rendered; the backend serves images from the active tab's
+folders (`set_active`). A tab in the background keeps its document state up
+to date from its watcher and shows a square when the file changed (peach),
+has a conflict or went missing (red); an unsaved tab shows a dot.
+
+Switching keeps per tab: the reading line, the editor state with its own undo
+history, the change marks by block key, and the block keys on screen. When a
+tab comes back, blocks whose keys the reader has not seen get change marks
+and the footer summarizes them, as for an update in the active tab.
+
+A save carries its session id and applies to its own tab, even if another tab
+is on screen by then; a save for a tab closed in the meantime is refused by
+the backend (`stale-session`). Opening, switching and closing wait for a
+running save. Closing a tab or the window asks about every tab with unsaved
+edits.
+
+A second start of psy.md hands its files to the running one
+(`tauri-plugin-single-instance`), which opens each as a tab and comes to the
+front; drag and drop and the macOS "open with" event open all files the same
+way. `session.json` stores the open tabs with their reading lines and the
+active one; a session from before tabs (`lastFile`) becomes one tab.
 
 The preview applies a rendering with a keyed diff
 ([src/preview/apply.ts](../src/preview/apply.ts)): each block's key is a hash
@@ -154,7 +180,8 @@ Documents are untrusted.
 ## Settings and session
 
 `settings.json` (theme, language, font, zoom, change marks) and `session.json`
-(last file, view, contents, split ratio, reading line, recent files) live in
+(open tabs with their reading lines, the active tab, view, contents, split
+ratio, recent files) live in
 the app config folder and are written atomically. Invalid values fall back to
 defaults; an unreadable file is kept as `*.bad`. Window size and position are
 restored by the window-state plugin.

@@ -58,7 +58,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, lang: &str) -> tauri::Result<Menu<R
             &item("save", "menu.save", Some("CmdOrCtrl+S"))?,
             &item("save-as", "menu.saveAs", Some("CmdOrCtrl+Shift+S"))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::close_window(app, Some(&l("menu.close")))?,
+            // Cmd+W closes the tab, as in browsers; the window keeps its close button.
+            &item("close-tab", "menu.closeTab", Some("CmdOrCtrl+W"))?,
+            &item("reopen-tab", "menu.reopenTab", Some("CmdOrCtrl+Shift+T"))?,
         ],
     )?;
     let edit = Submenu::with_items(
@@ -86,7 +88,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, lang: &str) -> tauri::Result<Menu<R
             &item("view-split", "view.split", Some("CmdOrCtrl+2"))?,
             &item("view-source", "view.source", Some("CmdOrCtrl+3"))?,
             &PredefinedMenuItem::separator(app)?,
-            &item("contents", "menu.contents", Some("CmdOrCtrl+Shift+T"))?,
+            &item("contents", "menu.contents", Some("CmdOrCtrl+B"))?,
             &PredefinedMenuItem::separator(app)?,
             &item("zoom-in", "menu.zoomIn", Some("CmdOrCtrl+="))?,
             &item("zoom-out", "menu.zoomOut", Some("CmdOrCtrl+-"))?,

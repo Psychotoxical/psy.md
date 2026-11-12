@@ -10,6 +10,10 @@ keystroke away, and psy.md never overwrites anyone's changes without asking.
 
 ## Features
 
+- **Tabs**: every file opens in a tab of the one window, also when you open
+  it from the file manager while psy.md runs. Tabs in the background keep
+  watching their file and show when it changed; all tabs come back at the
+  next start.
 - **Live updates** that survive atomic saves (write temp file, rename),
   rapid writes, files that briefly disappear or go empty, and deletion.
 - **Change bars** in the margin and a footer line that says what changed and
@@ -45,12 +49,17 @@ On macOS use ⌘ instead of Ctrl.
 | Find, next, previous | Ctrl+F, Enter, Shift+Enter |
 | Close find, menus, overlays | Esc |
 | Preview / Split / Source | Ctrl+1 / Ctrl+2 / Ctrl+3 |
-| Contents on/off | Ctrl+Shift+T |
+| Close tab / reopen closed tab | Ctrl+W / Ctrl+Shift+T |
+| Next / previous tab | Ctrl+Tab / Ctrl+Shift+Tab |
+| Contents on/off | Ctrl+B |
 | Zoom in / out / reset | Ctrl++ / Ctrl+− / Ctrl+0, or Ctrl+mouse wheel |
 | Settings | Ctrl+, |
 
 Open a file by passing its path (`psymd notes.md`), with the file dialog, by
-dragging it into the window, or from the recent files in the file menu.
+dragging it into the window, or from the recent files in the file menu. Each
+file opens in its own tab; a file that is open already only gets its tab
+shown. Right-click a tab to close others or the ones to its right, copy its
+path or show it in the file manager.
 
 ## Build and run
 
@@ -126,7 +135,7 @@ writing a file (atomic replace, in-place writes, bursts, truncate-then-write).
   when Inter is selected.
 - Hard links are replaced by a new file on save (the atomic rename creates a
   new file at the path).
-- No tabs, folder tree, PDF export or WYSIWYG editing in this version.
+- No folder tree, PDF export or WYSIWYG editing in this version.
 
 ## License
 

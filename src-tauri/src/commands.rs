@@ -50,7 +50,7 @@ fn config_dir(app: &AppHandle) -> CmdResult<PathBuf> {
 pub struct StartupState {
     settings: Option<Value>,
     session: Option<Value>,
-    startup_file: Option<String>,
+    startup_files: Vec<String>,
     platform: &'static str,
 }
 
@@ -64,16 +64,15 @@ pub async fn load_state(app: AppHandle, state: State<'_, AppState>) -> CmdResult
         )
     })
     .await?;
-    let startup_file = state
-        .startup_file
+    let startup_files = state
+        .startup_files
         .lock()
-        .ok()
-        .and_then(|mut f| f.take())
-        .map(|p| display_path(&p));
+        .map(|mut f| f.drain(..).map(|p| display_path(&p)).collect())
+        .unwrap_or_default();
     Ok(StartupState {
         settings,
         session,
-        startup_file,
+        startup_files,
         platform: if cfg!(target_os = "macos") {
             "macos"
         } else if cfg!(windows) {
@@ -196,14 +195,14 @@ fn start_session(
         Ok(w) => (Some(w), None),
         Err(e) => (None, Some(e.to_string())),
     };
-    state.replace_doc(Some(DocSession {
+    state.insert_doc(DocSession {
         id,
         path,
         dir: dir.clone(),
         roots: vec![dir.clone()],
         allow_external_images: false,
         watcher,
-    }));
+    });
     Ok((id, dir, watch_error))
 }
 
@@ -241,8 +240,14 @@ pub async fn open_document(
 }
 
 #[tauri::command]
-pub fn close_document(state: State<'_, AppState>) {
-    state.replace_doc(None);
+pub fn close_document(state: State<'_, AppState>, session_id: u64) {
+    state.remove_doc(session_id);
+}
+
+/// The tab on screen; its folders serve images to the preview.
+#[tauri::command]
+pub fn set_active(state: State<'_, AppState>, session_id: u64) {
+    state.active.store(session_id, Ordering::Relaxed);
 }
 
 #[derive(Serialize)]
@@ -258,10 +263,11 @@ pub struct RenderReply {
 #[tauri::command]
 pub async fn render_markdown(
     state: State<'_, AppState>,
+    session_id: u64,
     text: String,
     req_id: u64,
 ) -> CmdResult<RenderReply> {
-    let ctx = state.render_ctx();
+    let ctx = state.render_ctx(session_id);
     blocking(move || {
         let start = Instant::now();
         let r = render(&text, &ctx);
@@ -302,20 +308,13 @@ pub struct SavedDoc {
     dir: String,
 }
 
-/// A save belongs to the document it was started for. If another file is
-/// open by now, writing (or switching the session after save as) would mix
-/// the two documents.
-fn same_session(current: Option<u64>, expected: u64) -> CmdResult<()> {
-    if current == Some(expected) {
-        Ok(())
-    } else {
-        Err(CmdError::new("stale-session"))
-    }
-}
-
-fn current_session(state: &AppState) -> CmdResult<Option<u64>> {
-    let guard = state.doc.lock().map_err(|_| CmdError::new("unknown"))?;
-    Ok(guard.as_ref().map(|s| s.id))
+/// A save belongs to the document (tab) it was started for. If that one was
+/// closed in the meantime, writing (or moving it after save as) would touch
+/// a file nobody looks at any more.
+fn require_session(state: &AppState, id: u64) -> CmdResult<()> {
+    state
+        .with_doc(id, |_| ())
+        .ok_or_else(|| CmdError::new("stale-session"))
 }
 
 #[tauri::command]
@@ -324,7 +323,7 @@ pub async fn save_document(
     state: State<'_, AppState>,
     request: SaveRequest,
 ) -> CmdResult<SavedDoc> {
-    same_session(current_session(&state)?, request.session_id)?;
+    require_session(&state, request.session_id)?;
     let eol = if request.eol == "crlf" {
         Eol::Crlf
     } else {
@@ -336,16 +335,15 @@ pub async fn save_document(
     let save_as = request.target_path.is_some();
     let (path, session_id, dir) = match &request.target_path {
         Some(p) => (std::path::absolute(PathBuf::from(p))?, 0, PathBuf::new()),
-        None => {
-            let guard = state.doc.lock().map_err(|_| CmdError::new("unknown"))?;
-            let s = guard.as_ref().ok_or_else(|| CmdError::new("no-document"))?;
-            same_session(Some(s.id), request.session_id)?;
-            // Tell the watcher first so our own write is never reported back.
-            if let Some(w) = &s.watcher {
-                w.set_known(token.clone());
-            }
-            (s.path.clone(), s.id, s.dir.clone())
-        }
+        None => state
+            .with_doc(request.session_id, |s| {
+                // Tell the watcher first so our own write is never reported back.
+                if let Some(w) = &s.watcher {
+                    w.set_known(token.clone());
+                }
+                (s.path.clone(), s.id, s.dir.clone())
+            })
+            .ok_or_else(|| CmdError::new("stale-session"))?,
     };
     let expected = if save_as {
         None
@@ -359,10 +357,15 @@ pub async fn save_document(
     perf::mark("saved", "");
 
     let (session_id, dir) = if save_as {
-        // The file is written; the open document only moves to it if it is
-        // still the one the save was started for.
-        same_session(current_session(&state)?, request.session_id)?;
+        // The file is written; the tab only moves to it if it is still open.
+        // It gets a new session, so events of the old file are told apart.
+        require_session(&state, request.session_id)?;
         let (id, dir, _) = start_session(&app, &state, path.clone(), saved.clone())?;
+        let was_active = state.active.load(Ordering::Relaxed) == request.session_id;
+        state.remove_doc(request.session_id);
+        if was_active {
+            state.active.store(id, Ordering::Relaxed);
+        }
         (id, dir)
     } else {
         (session_id, dir)
@@ -380,17 +383,19 @@ pub async fn save_document(
 
 const MD_FILTER: &[&str] = &["md", "markdown", "mdown", "mkd", "mkdn", "mdwn", "txt"];
 
+/// Folder of the tab on screen, where file dialogs start.
+fn active_dir(state: &AppState) -> Option<PathBuf> {
+    let id = state.active.load(Ordering::Relaxed);
+    state.with_doc(id, |s| s.dir.clone())
+}
+
 #[tauri::command]
 pub async fn pick_open_file(
     app: AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> CmdResult<Option<String>> {
-    let start_dir = state
-        .doc
-        .lock()
-        .ok()
-        .and_then(|d| d.as_ref().map(|s| s.dir.clone()));
+    let start_dir = active_dir(&state);
     let mut dialog = app
         .dialog()
         .file()
@@ -412,11 +417,7 @@ pub async fn pick_save_path(
     state: State<'_, AppState>,
     suggested_name: String,
 ) -> CmdResult<Option<String>> {
-    let start_dir = state
-        .doc
-        .lock()
-        .ok()
-        .and_then(|d| d.as_ref().map(|s| s.dir.clone()));
+    let start_dir = active_dir(&state);
     let mut dialog = app
         .dialog()
         .file()
@@ -435,12 +436,13 @@ pub async fn pick_save_path(
 // -------------------------------------------------------- links and images
 
 #[tauri::command]
-pub async fn resolve_link(state: State<'_, AppState>, href: String) -> CmdResult<String> {
+pub async fn resolve_link(
+    state: State<'_, AppState>,
+    session_id: u64,
+    href: String,
+) -> CmdResult<String> {
     let dir = state
-        .doc
-        .lock()
-        .ok()
-        .and_then(|d| d.as_ref().map(|s| s.dir.clone()))
+        .with_doc(session_id, |s| s.dir.clone())
         .ok_or_else(|| CmdError::new("no-document"))?;
     let path = blocking(move || docfs::resolve_markdown_link(&dir, &href)).await??;
     Ok(display_path(&path))
@@ -457,27 +459,42 @@ pub fn open_external(app: AppHandle, url: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
-pub fn set_external_images(state: State<'_, AppState>, allowed: bool) {
-    if let Ok(mut d) = state.doc.lock()
-        && let Some(s) = d.as_mut()
-    {
-        s.allow_external_images = allowed;
-    }
+pub fn set_external_images(state: State<'_, AppState>, session_id: u64, allowed: bool) {
+    state.with_doc(session_id, |s| s.allow_external_images = allowed);
 }
 
 #[tauri::command]
-pub async fn grant_folder(state: State<'_, AppState>, dir: String) -> CmdResult<()> {
+pub async fn grant_folder(
+    state: State<'_, AppState>,
+    session_id: u64,
+    dir: String,
+) -> CmdResult<()> {
     let real = blocking(move || std::fs::canonicalize(&dir)).await??;
     if !real.is_dir() {
         return Err(CmdError::new("not-found"));
     }
-    if let Ok(mut d) = state.doc.lock()
-        && let Some(s) = d.as_mut()
-        && !s.roots.contains(&real)
-    {
-        s.roots.push(real);
-    }
+    state.with_doc(session_id, |s| {
+        if !s.roots.contains(&real) {
+            s.roots.push(real);
+        }
+    });
     Ok(())
+}
+
+/// Shows an open document in the system file manager.
+#[tauri::command]
+pub async fn reveal_document(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: u64,
+) -> CmdResult<()> {
+    let path = state
+        .with_doc(session_id, |s| s.path.clone())
+        .ok_or_else(|| CmdError::new("no-document"))?;
+    // Blocks on shell or D-Bus calls, so it runs off the async workers.
+    blocking(move || app.opener().reveal_item_in_dir(path))
+        .await?
+        .map_err(|e| CmdError::with_detail("io", e.to_string()))
 }
 
 // ------------------------------------------------------------------- window
@@ -532,18 +549,34 @@ pub fn perf_mark(name: String, detail: Option<String>) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn save_for_the_open_document_is_allowed() {
-        assert_eq!(same_session(Some(3), 3), Ok(()));
+    use crate::state::DocSession;
+
+    fn state_with(ids: &[u64]) -> AppState {
+        let s = AppState::default();
+        for &id in ids {
+            s.insert_doc(DocSession {
+                id,
+                path: PathBuf::from("doc.md"),
+                dir: PathBuf::from("."),
+                roots: Vec::new(),
+                allow_external_images: false,
+                watcher: None,
+            });
+        }
+        s
     }
 
     #[test]
-    fn save_for_a_document_no_longer_open_is_refused() {
-        assert_eq!(
-            same_session(Some(4), 3),
-            Err(CmdError::new("stale-session"))
-        );
-        assert_eq!(same_session(None, 3), Err(CmdError::new("stale-session")));
+    fn save_for_any_open_tab_is_allowed() {
+        let s = state_with(&[3, 4]);
+        assert_eq!(require_session(&s, 3), Ok(()));
+        assert_eq!(require_session(&s, 4), Ok(()));
+    }
+
+    #[test]
+    fn save_for_a_closed_tab_is_refused() {
+        let s = state_with(&[4]);
+        assert_eq!(require_session(&s, 3), Err(CmdError::new("stale-session")));
     }
 
     #[test]
