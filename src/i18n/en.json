@@ -96,6 +96,7 @@
   "error.not-a-file": "That is not a file.",
   "error.blocked-url": "Links of this kind are not opened.",
   "error.no-document": "No document is open.",
+  "error.stale-session": "Not saved: another file was opened in the meantime.",
   "error.unknown": "Something went wrong: {detail}",
   "error.title": "Could not complete the action",
   "find.label": "Find in document",

@@ -57,6 +57,8 @@ export interface RenderReply {
 }
 
 export interface SaveRequest {
+  /** The document the text belongs to; the backend refuses another one. */
+  sessionId: number;
   text: string;
   bom: boolean;
   eol: "lf" | "crlf";

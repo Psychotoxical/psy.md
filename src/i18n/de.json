@@ -96,6 +96,7 @@
   "error.not-a-file": "Das ist keine Datei.",
   "error.blocked-url": "Links dieser Art werden nicht geöffnet.",
   "error.no-document": "Es ist kein Dokument geöffnet.",
+  "error.stale-session": "Nicht gespeichert: Inzwischen wurde eine andere Datei geöffnet.",
   "error.unknown": "Etwas ist schiefgegangen: {detail}",
   "error.title": "Aktion nicht möglich",
   "find.label": "Im Dokument suchen",

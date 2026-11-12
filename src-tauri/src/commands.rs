@@ -279,6 +279,8 @@ pub async fn render_markdown(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveRequest {
+    /// The document the text belongs to.
+    session_id: u64,
     text: String,
     bom: bool,
     eol: String,
@@ -300,12 +302,29 @@ pub struct SavedDoc {
     dir: String,
 }
 
+/// A save belongs to the document it was started for. If another file is
+/// open by now, writing (or switching the session after save as) would mix
+/// the two documents.
+fn same_session(current: Option<u64>, expected: u64) -> CmdResult<()> {
+    if current == Some(expected) {
+        Ok(())
+    } else {
+        Err(CmdError::new("stale-session"))
+    }
+}
+
+fn current_session(state: &AppState) -> CmdResult<Option<u64>> {
+    let guard = state.doc.lock().map_err(|_| CmdError::new("unknown"))?;
+    Ok(guard.as_ref().map(|s| s.id))
+}
+
 #[tauri::command]
 pub async fn save_document(
     app: AppHandle,
     state: State<'_, AppState>,
     request: SaveRequest,
 ) -> CmdResult<SavedDoc> {
+    same_session(current_session(&state)?, request.session_id)?;
     let eol = if request.eol == "crlf" {
         Eol::Crlf
     } else {
@@ -320,6 +339,7 @@ pub async fn save_document(
         None => {
             let guard = state.doc.lock().map_err(|_| CmdError::new("unknown"))?;
             let s = guard.as_ref().ok_or_else(|| CmdError::new("no-document"))?;
+            same_session(Some(s.id), request.session_id)?;
             // Tell the watcher first so our own write is never reported back.
             if let Some(w) = &s.watcher {
                 w.set_known(token.clone());
@@ -339,6 +359,9 @@ pub async fn save_document(
     perf::mark("saved", "");
 
     let (session_id, dir) = if save_as {
+        // The file is written; the open document only moves to it if it is
+        // still the one the save was started for.
+        same_session(current_session(&state)?, request.session_id)?;
         let (id, dir, _) = start_session(&app, &state, path.clone(), saved.clone())?;
         (id, dir)
     } else {
@@ -503,4 +526,39 @@ pub fn set_language(app: AppHandle, lang: String) {
 #[tauri::command]
 pub fn perf_mark(name: String, detail: Option<String>) {
     perf::mark(&name, detail.as_deref().unwrap_or(""));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_for_the_open_document_is_allowed() {
+        assert_eq!(same_session(Some(3), 3), Ok(()));
+    }
+
+    #[test]
+    fn save_for_a_document_no_longer_open_is_refused() {
+        assert_eq!(
+            same_session(Some(4), 3),
+            Err(CmdError::new("stale-session"))
+        );
+        assert_eq!(same_session(None, 3), Err(CmdError::new("stale-session")));
+    }
+
+    #[test]
+    fn save_request_reads_the_fields_the_frontend_sends() {
+        let r: SaveRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": 7,
+            "text": "a",
+            "bom": false,
+            "eol": "lf",
+            "expectedToken": null,
+            "force": false,
+            "targetPath": null
+        }))
+        .unwrap();
+        assert_eq!(r.session_id, 7);
+        assert!(r.target_path.is_none());
+    }
 }

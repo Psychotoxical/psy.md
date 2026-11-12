@@ -71,6 +71,30 @@ export function shortcutFor(e: KeyInput, platform: Platform): Action | null {
   }
 }
 
+/** Actions the macOS menu bar carries with their shortcut (src-tauri/src/menu.rs). */
+const MAC_MENU: ReadonlySet<Action> = new Set<Action>([
+  "open",
+  "save",
+  "saveAs",
+  "find",
+  "viewPreview",
+  "viewSplit",
+  "viewSource",
+  "toggleToc",
+  "zoomIn",
+  "zoomOut",
+  "zoomReset",
+  "settings",
+]);
+
+/**
+ * Whether the native menu already runs this shortcut and reports it as a
+ * menu event, so the key handler must leave it alone to avoid running it twice.
+ */
+export function menuOwnsShortcut(action: Action, platform: Platform): boolean {
+  return platform === "macos" && MAC_MENU.has(action);
+}
+
 /** Human-readable shortcut, e.g. "Strg+Umschalt+S" or "⇧⌘S". */
 export function shortcutLabel(platform: Platform, combo: string, lang: string): string {
   if (platform === "macos") {

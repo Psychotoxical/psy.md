@@ -1,5 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { type KeyInput, shortcutFor, shortcutLabel } from "./keys";
+import { type KeyInput, menuOwnsShortcut, shortcutFor, shortcutLabel } from "./keys";
+
+describe("menuOwnsShortcut", () => {
+  it("leaves change navigation to the key handler on macOS", () => {
+    expect(menuOwnsShortcut("nextChange", "macos")).toBe(false);
+    expect(menuOwnsShortcut("prevChange", "macos")).toBe(false);
+    expect(menuOwnsShortcut("escape", "macos")).toBe(false);
+  });
+
+  it("lets the macOS menu run the shortcuts it lists", () => {
+    for (const a of [
+      "open",
+      "save",
+      "saveAs",
+      "find",
+      "viewSplit",
+      "zoomIn",
+      "settings",
+    ] as const) {
+      expect(menuOwnsShortcut(a, "macos")).toBe(true);
+    }
+  });
+
+  it("owns nothing on Windows and Linux", () => {
+    expect(menuOwnsShortcut("save", "windows")).toBe(false);
+    expect(menuOwnsShortcut("save", "linux")).toBe(false);
+  });
+});
 
 const ev = (over: Partial<KeyInput>): KeyInput => ({
   key: "",

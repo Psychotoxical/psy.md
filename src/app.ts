@@ -14,7 +14,7 @@ import {
 import type { Editor } from "./editor/editor";
 import { applyI18n, clock, type Key, language, onLanguageChange, setLanguage, t } from "./i18n";
 import { type DocEvent, ipc, isCmdError, type StartupState } from "./ipc";
-import { type Action, type Platform, shortcutFor, shortcutLabel } from "./keys";
+import { type Action, menuOwnsShortcut, type Platform, shortcutFor, shortcutLabel } from "./keys";
 import { relabel } from "./preview/decorate";
 import { classifyHref } from "./preview/links";
 import { Preview, type ShowResult } from "./preview/preview";
@@ -77,6 +77,8 @@ export class App {
   private sessionTimer: ReturnType<typeof setTimeout> | undefined;
   private settingsTimer: ReturnType<typeof setTimeout> | undefined;
   private saving = false;
+  /** The running save or save as; opening and closing wait for it. */
+  private saveJob: Promise<boolean> | null = null;
   private footLeft:
     | { kind: "saved"; at: number }
     | {
@@ -247,6 +249,7 @@ export class App {
   // ---------------------------------------------------------- documents
 
   private async confirmUnsaved(): Promise<boolean> {
+    await this.settle();
     if (!this.doc || !isDirty(this.doc)) return true;
     const choice = await ask({
       title: t("dialog.unsaved.title", { name: this.doc.file.name }),
@@ -260,7 +263,8 @@ export class App {
       cancelId: "cancel",
     });
     if (choice === "cancel") return false;
-    if (choice === "save") return this.save();
+    // Typing can go on while the file is written; that text is asked about too.
+    if (choice === "save") return (await this.save()) && this.confirmUnsaved();
     return true;
   }
 
@@ -283,6 +287,7 @@ export class App {
       fragment?: string | null;
     } = {},
   ): Promise<boolean> {
+    await this.settle();
     if (opts.guard !== false && !(await this.confirmUnsaved())) return false;
     let opened: Awaited<ReturnType<typeof ipc.openDocument>>;
     try {
@@ -516,6 +521,27 @@ export class App {
     return this.writeDoc(hasConflict(this.doc ?? ({} as DocState)));
   }
 
+  /** Registers a running save so that opening and closing can wait for it. */
+  private track(job: Promise<boolean>): Promise<boolean> {
+    this.saveJob = job;
+    const done = () => {
+      if (this.saveJob === job) this.saveJob = null;
+    };
+    job.then(done, done);
+    return job;
+  }
+
+  /** Waits until no save is running, so the document state is final. */
+  private async settle(): Promise<void> {
+    while (this.saveJob) {
+      try {
+        await this.saveJob;
+      } catch {
+        // The save reported its own error.
+      }
+    }
+  }
+
   private async confirmOverwrite(): Promise<boolean> {
     if (!this.doc) return false;
     const choice = await ask({
@@ -536,14 +562,22 @@ export class App {
     return choice === "replace";
   }
 
-  private async writeDoc(force: boolean): Promise<boolean> {
+  private writeDoc(force: boolean): Promise<boolean> {
+    return this.track(this.writeDocOnce(force));
+  }
+
+  private async writeDocOnce(force: boolean): Promise<boolean> {
     if (!this.doc) return false;
+    // The answer belongs to this document; another one may be open by then.
+    const sessionId = this.doc.file.sessionId;
+    const isSame = () => this.doc?.file.sessionId === sessionId;
     const text = this.doc.buffer;
     const base = this.doc.base;
     this.saving = true;
     this.refreshChrome();
     try {
       const saved = await ipc.save({
+        sessionId,
         text,
         bom: base.bom,
         eol: base.eol,
@@ -551,19 +585,19 @@ export class App {
         force,
         targetPath: null,
       });
-      if (this.doc) {
-        this.doc = reduce(this.doc, { type: "saved", text, token: saved.token, at: Date.now() });
-        this.footLeft = { kind: "saved", at: Date.now() };
-        this.preview.clearMarks();
-        this.toc.markChanged(new Set());
-      }
+      if (!this.doc || !isSame()) return false;
+      this.doc = reduce(this.doc, { type: "saved", text, token: saved.token, at: Date.now() });
+      this.footLeft = { kind: "saved", at: Date.now() };
+      this.preview.clearMarks();
+      this.toc.markChanged(new Set());
       return true;
     } catch (e) {
       if (isCmdError(e) && e.code === "conflict" && !force) {
         this.saving = false;
-        if (await this.confirmOverwrite()) return this.writeDoc(true);
+        if (isSame() && (await this.confirmOverwrite())) return this.writeDocOnce(true);
         return false;
       }
+      if (!isSame()) return false;
       toast(errorText(e), "error");
       return false;
     } finally {
@@ -574,6 +608,12 @@ export class App {
 
   async saveAs(): Promise<boolean> {
     if (!this.doc || this.saving) return false;
+    return this.track(this.saveAsOnce());
+  }
+
+  private async saveAsOnce(): Promise<boolean> {
+    if (!this.doc) return false;
+    const sessionId = this.doc.file.sessionId;
     let target: string | null;
     try {
       target = await ipc.pickSavePath(this.doc.file.name);
@@ -581,13 +621,14 @@ export class App {
       toast(errorText(e), "error");
       return false;
     }
-    if (!target || !this.doc) return false;
+    if (!target || this.doc?.file.sessionId !== sessionId) return false;
     const text = this.doc.buffer;
     const base = this.doc.base;
     this.saving = true;
     this.refreshChrome();
     try {
       const saved = await ipc.save({
+        sessionId,
         text,
         bom: base.bom,
         eol: base.eol,
@@ -595,7 +636,7 @@ export class App {
         force: true,
         targetPath: target,
       });
-      if (this.doc) {
+      if (this.doc?.file.sessionId === sessionId) {
         this.doc = reduce(this.doc, {
           type: "savedAs",
           text,
@@ -645,6 +686,7 @@ export class App {
     await ipc.closeAck();
     if (isDialogOpen()) return;
     if (!(await this.confirmUnsaved())) return;
+    const decided = this.doc?.buffer;
     this.rememberPosition();
     clearTimeout(this.sessionTimer);
     clearTimeout(this.settingsTimer);
@@ -653,6 +695,8 @@ export class App {
     } catch {
       // Losing the session is acceptable; the document was handled above.
     }
+    // Text typed after the decision above is asked about before the window goes.
+    if (this.doc && this.doc.buffer !== decided && !(await this.confirmUnsaved())) return;
     await ipc.confirmClose();
   }
 
@@ -968,9 +1012,7 @@ export class App {
     const action = shortcutFor(e, this.platform);
     if (!action) return;
     if (isDialogOpen() && action !== "escape") return;
-    // On macOS the native menu owns these shortcuts and reports them as
-    // menu events; handling the key too would run them twice.
-    if (this.platform === "macos" && action !== "escape") return;
+    if (menuOwnsShortcut(action, this.platform)) return;
     if (this.run(action)) e.preventDefault();
   }
 
